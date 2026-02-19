@@ -5,6 +5,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.markdown import hbold, hcode
 
 from datetime import datetime, timezone
@@ -65,7 +66,7 @@ async def run():
     cfg = load_config()
     await db.init_db(cfg.db_path)
 
-    bot = Bot(cfg.bot_token, parse_mode=ParseMode.HTML)
+    bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
 
     @dp.message(CommandStart())
