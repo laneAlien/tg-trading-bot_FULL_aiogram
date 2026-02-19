@@ -5,6 +5,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.markdown import hbold, hcode
 
 from datetime import datetime, timezone
@@ -14,15 +15,24 @@ import secrets
 from .config import load_config
 from . import db
 from .keyboards import (
-    kb_main, kb_access, kb_support, kb_ticket_admin, kb_admin_panel,
-    kb_coins_menu, kb_chart_tf, kb_symbol_actions, kb_journal
+    kb_main,
+    kb_access,
+    kb_support,
+    kb_ticket_admin,
+    kb_admin_panel,
+    kb_coins_menu,
+    kb_chart_tf,
+    kb_symbol_actions,
+    kb_journal,
 )
 from .charts import fetch_ohlcv, add_ma30, detect_regime, render_png
 from .coins import top_movers
 from .texts import DECISION_BRIEF, PROMO_TEXT, TILT_TEXT, CHECKLIST_PRE, CHECKLIST_POST, DISCLAIMER
 
+
 class SupportStates(StatesGroup):
     waiting_ticket_text = State()
+
 
 class AdminStates(StatesGroup):
     waiting_reply_text = State()
@@ -30,11 +40,14 @@ class AdminStates(StatesGroup):
     waiting_whitelist_add = State()
     waiting_whitelist_remove = State()
 
+
 class CoinsStates(StatesGroup):
     awaiting_symbol_search = State()
 
+
 class JournalStates(StatesGroup):
     awaiting_journal_text = State()
+
 
 async def ensure_access(cfg, cq: CallbackQuery) -> bool:
     ok = await db.is_access_active(cfg.db_path, cq.from_user.id)
@@ -44,22 +57,22 @@ async def ensure_access(cfg, cq: CallbackQuery) -> bool:
     await cq.message.answer("Доступ не активен. Открой ⭐ Доступ.", reply_markup=kb_access())
     return False
 
+
 def mk_payload(user_id: int) -> str:
     return f"access30d:{user_id}:{int(datetime.now(timezone.utc).timestamp())}:{secrets.token_hex(4)}"
+
 
 async def run():
     cfg = load_config()
     await db.init_db(cfg.db_path)
 
-    bot = Bot(cfg.bot_token, parse_mode=ParseMode.HTML)
+    bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
 
     @dp.message(CommandStart())
     async def start(m: Message):
         await db.upsert_user(cfg.db_path, m.from_user.id, m.from_user.username)
-        await m.answer("🏠 Главное меню
-
-⚠️ Не финсовет.", reply_markup=kb_main())
+        await m.answer("🏠 Главное меню\n\n⚠️ Не финсовет.", reply_markup=kb_main())
 
     @dp.message(Command("admin"))
     async def admin(m: Message):
@@ -86,9 +99,7 @@ async def run():
     @dp.callback_query(F.data == "access:disclaimer")
     async def disclaimer(cq: CallbackQuery):
         await cq.answer()
-        await cq.message.edit_text(DISCLAIMER + "
-
-Нажми ✅ Я согласен.", reply_markup=kb_access())
+        await cq.message.edit_text(DISCLAIMER + "\n\nНажми ✅ Я согласен.", reply_markup=kb_access())
 
     @dp.callback_query(F.data == "access:disclaimer:agree")
     async def disclaimer_agree(cq: CallbackQuery):
@@ -101,14 +112,11 @@ async def run():
         await cq.answer()
         u = await db.get_user(cfg.db_path, cq.from_user.id) or {}
         active = await db.is_access_active(cfg.db_path, cq.from_user.id)
-        txt = f"Статус: {hbold('АКТИВЕН' if active else 'НЕ АКТИВЕН')}
-"
+        txt = f"Статус: {hbold('АКТИВЕН' if active else 'НЕ АКТИВЕН')}\n"
         if u.get("is_whitelisted") == 1:
-            txt += "Режим: FREE (whitelist)
-"
+            txt += "Режим: FREE (whitelist)\n"
         else:
-            txt += f"access_until: {hcode(str(u.get('access_until')))}
-"
+            txt += f"access_until: {hcode(str(u.get('access_until')))}\n"
         txt += f"active_symbol: {hcode(str(u.get('active_symbol')))}"
         await cq.message.edit_text(txt, reply_markup=kb_access())
 
@@ -132,10 +140,8 @@ async def run():
             prices=prices,
         )
         await cq.message.answer(
-            f"⭐ Доступ на 30 дней: {hbold(str(cfg.stars_price))} Stars
-
-Оплатить: {link}",
-            reply_markup=kb_access()
+            f"⭐ Доступ на 30 дней: {hbold(str(cfg.stars_price))} Stars\n\nОплатить: {link}",
+            reply_markup=kb_access(),
         )
 
     @dp.pre_checkout_query()
@@ -153,7 +159,10 @@ async def run():
             return
         expected = int(p["stars_amount"])
         if int(sp.total_amount) != expected:
-            await bot.send_message(cfg.support_group_id, f"⚠️ Payment amount mismatch payload={payload} got={sp.total_amount} expected={expected}")
+            await bot.send_message(
+                cfg.support_group_id,
+                f"⚠️ Payment amount mismatch payload={payload} got={sp.total_amount} expected={expected}",
+            )
             return
         await db.mark_payment_paid(cfg.db_path, payload)
         await db.grant_access_30d(cfg.db_path, m.from_user.id)
@@ -163,49 +172,45 @@ async def run():
     @dp.callback_query(F.data == "main:help")
     async def help_(cq: CallbackQuery):
         await cq.answer()
-        await cq.message.answer("ℹ️ Помощь
-
-— /getchatid
-— /admin (админ)
-
-⚠️ Не финсовет.", reply_markup=kb_main())
+        await cq.message.answer("ℹ️ Помощь\n\n— /getchatid\n— /admin (админ)\n\n⚠️ Не финсовет.", reply_markup=kb_main())
 
     # Coins
     @dp.callback_query(F.data == "main:coins")
     async def coins(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
         await cq.message.edit_text("🪙 Монеты", reply_markup=kb_coins_menu())
 
-    @dp.callback_query(F.data.in_({"coins:gainers","coins:losers"}))
+    @dp.callback_query(F.data.in_({"coins:gainers", "coins:losers"}))
     async def coins_movers(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer("Считаю...")
         direction = "gainers" if cq.data.endswith("gainers") else "losers"
         movers = top_movers(limit=10, direction=direction)
-        lines = [f"{i+1}) <code>{sym}</code>  {pct:+.2f}%" for i,(sym,pct) in enumerate(movers)]
-        await cq.message.answer(("📈 Топ рост
-" if direction=="gainers" else "📉 Топ падение
-") + "
-".join(lines) + "
-
-🔎 Поиск → выбрать монету")
+        lines = [f"{i+1}) <code>{sym}</code>  {pct:+.2f}%" for i, (sym, pct) in enumerate(movers)]
+        await cq.message.answer(
+            ("📈 Топ рост\n" if direction == "gainers" else "📉 Топ падение\n")
+            + "\n".join(lines)
+            + "\n\n🔎 Поиск → выбрать монету"
+        )
 
     @dp.callback_query(F.data == "coins:favorites")
     async def coins_favorites(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
         favs = await db.list_favorites(cfg.db_path, cq.from_user.id, 30)
         if not favs:
             return await cq.message.answer("⭐ Избранное пустое. Добавь через 🔎 Поиск.")
-        msg = "⭐ Избранное:
-" + "
-".join([f"• <code>{s}</code>" for s in favs])
+        msg = "⭐ Избранное:\n" + "\n".join([f"• <code>{s}</code>" for s in favs])
         await cq.message.answer(msg)
 
     @dp.callback_query(F.data == "coins:search")
     async def coins_search(cq: CallbackQuery, state: FSMContext):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
         await state.set_state(CoinsStates.awaiting_symbol_search)
         await cq.message.answer("Введи символ в формате <code>RAVE/USDT</code>")
@@ -222,17 +227,22 @@ async def run():
 
     @dp.callback_query(F.data.startswith("coins:set:"))
     async def coins_set(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
-        symbol = cq.data.split(":",2)[2]
+        if not await ensure_access(cfg, cq):
+            return
+        symbol = cq.data.split(":", 2)[2]
         await cq.answer("OK")
         await db.set_active_symbol(cfg.db_path, cq.from_user.id, symbol)
         favs = await db.list_favorites(cfg.db_path, cq.from_user.id, 200)
-        await cq.message.answer(f"✅ Активная монета: <code>{symbol}</code>", reply_markup=kb_symbol_actions(symbol, symbol in favs))
+        await cq.message.answer(
+            f"✅ Активная монета: <code>{symbol}</code>",
+            reply_markup=kb_symbol_actions(symbol, symbol in favs),
+        )
 
     @dp.callback_query(F.data.startswith("coins:fav:"))
     async def coins_fav(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
-        _,_,action,symbol = cq.data.split(":",3)
+        if not await ensure_access(cfg, cq):
+            return
+        _, _, action, symbol = cq.data.split(":", 3)
         await cq.answer()
         if action == "add":
             await db.add_favorite(cfg.db_path, cq.from_user.id, symbol)
@@ -244,13 +254,15 @@ async def run():
     # Regime/Charts
     @dp.callback_query(F.data == "main:regime")
     async def regime(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
         await cq.message.edit_text("📊 Выбери TF", reply_markup=kb_chart_tf())
 
     @dp.callback_query(F.data.startswith("chart:tf:"))
     async def chart(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         tf = cq.data.split(":")[-1]
         await cq.answer("График...")
         u = await db.get_user(cfg.db_path, cq.from_user.id) or {}
@@ -263,52 +275,51 @@ async def run():
             return await cq.message.answer(f"❌ Ошибка: <code>{str(e)[:200]}</code>")
         await cq.message.answer_photo(
             photo=png,
-            caption=f"{hbold(symbol)} • {hcode(tf)}
-Режим: {hbold(reg)}
-
-{DECISION_BRIEF}",
-            reply_markup=kb_chart_tf()
+            caption=f"{hbold(symbol)} • {hcode(tf)}\nРежим: {hbold(reg)}\n\n{DECISION_BRIEF}",
+            reply_markup=kb_chart_tf(),
         )
 
     # Guides
     @dp.callback_query(F.data == "main:promo")
     async def promo(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
         await cq.message.answer(PROMO_TEXT)
 
     @dp.callback_query(F.data == "main:tilt")
     async def tilt(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
         await cq.message.answer(TILT_TEXT)
 
     @dp.callback_query(F.data == "main:checklists")
     async def checklists(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
-        await cq.message.answer(CHECKLIST_PRE + "
-
-" + CHECKLIST_POST)
+        await cq.message.answer(CHECKLIST_PRE + "\n\n" + CHECKLIST_POST)
 
     @dp.callback_query(F.data == "main:strategies")
     async def strategies(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
-        await cq.message.answer("⚙️ Стратегии
-
-" + DECISION_BRIEF)
+        await cq.message.answer("⚙️ Стратегии\n\n" + DECISION_BRIEF)
 
     # Journal
     @dp.callback_query(F.data == "main:journal")
     async def journal(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
         await cq.message.edit_text("🧾 Журнал", reply_markup=kb_journal())
 
     @dp.callback_query(F.data == "journal:add")
     async def journal_add(cq: CallbackQuery, state: FSMContext):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
         await state.set_state(JournalStates.awaiting_journal_text)
         await cq.message.answer("Напиши запись (1 сообщение).")
@@ -321,44 +332,43 @@ async def run():
 
     @dp.callback_query(F.data == "journal:list")
     async def journal_list(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
         items = await db.list_journal(cfg.db_path, cq.from_user.id, 20)
         if not items:
             return await cq.message.answer("Пусто")
-        txt = "🗂 Последние записи:
-
-" + "
-
-".join([f"{hcode(ts[:19])}
-{t}" for ts,t in items])
+        txt = "🗂 Последние записи:\n\n" + "\n\n".join([f"{hcode(ts[:19])}\n{t}" for ts, t in items])
         await cq.message.answer(txt)
 
     # Privatka
     @dp.callback_query(F.data == "main:privatka")
     async def privatka(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
         if not cfg.private_channel_id:
             return await cq.message.answer("PRIVATE_CHANNEL_ID не задан в .env")
         try:
             link = await bot.create_chat_invite_link(chat_id=cfg.private_channel_id, member_limit=1)
-            await cq.message.answer(f"🔒 Приватка — одноразовая ссылка:
-{link.invite_link}")
+            await cq.message.answer(f"🔒 Приватка — одноразовая ссылка:\n{link.invite_link}")
         except Exception as e:
-            await cq.message.answer(f"❌ Не смог создать invite-link. Проверь права бота в канале.
-<code>{str(e)[:200]}</code>")
+            await cq.message.answer(
+                f"❌ Не смог создать invite-link. Проверь права бота в канале.\n<code>{str(e)[:200]}</code>"
+            )
 
     # Support
     @dp.callback_query(F.data == "main:support")
     async def support(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
         await cq.message.edit_text("🆘 Поддержка", reply_markup=kb_support())
 
     @dp.callback_query(F.data == "support:new")
     async def support_new(cq: CallbackQuery, state: FSMContext):
-        if not await ensure_access(cfg, cq): return
+        if not await ensure_access(cfg, cq):
+            return
         await cq.answer()
         await state.set_state(SupportStates.waiting_ticket_text)
         await cq.message.answer("Опиши проблему одним сообщением.")
@@ -370,13 +380,9 @@ async def run():
         ticket_id = await db.create_ticket(cfg.db_path, m.from_user.id, m.text or "")
         await m.answer(f"✅ Тикет <code>#{ticket_id}</code> создан. Мы ответим здесь.")
         txt = (
-            f"🆘 <b>Тикет</b> <code>#{ticket_id}</code>
-"
-            f"user_id: <code>{m.from_user.id}</code>
-"
-            f"username: @{m.from_user.username if m.from_user.username else '—'}
-
-"
+            f"🆘 <b>Тикет</b> <code>#{ticket_id}</code>\n"
+            f"user_id: <code>{m.from_user.id}</code>\n"
+            f"username: @{m.from_user.username if m.from_user.username else '—'}\n\n"
             f"{m.text or ''}"
         )
         try:
@@ -411,9 +417,7 @@ async def run():
             return await m.reply("❌ Тикет не найден")
         user_id = int(row["user_id"])
         await db.add_ticket_message(cfg.db_path, ticket_id, "admin", m.text)
-        await bot.send_message(user_id, f"💬 Ответ по тикету <code>#{ticket_id}</code>:
-
-{m.text}")
+        await bot.send_message(user_id, f"💬 Ответ по тикету <code>#{ticket_id}</code>:\n\n{m.text}")
         await m.reply("✅ Отправлено")
 
     @dp.callback_query(F.data.startswith("admin:tickets:close:"))
@@ -437,7 +441,7 @@ async def run():
         for t in tickets:
             await cq.message.answer(
                 f"🆘 <code>#{t['ticket_id']}</code> user_id=<code>{t['user_id']}</code>",
-                reply_markup=kb_ticket_admin(int(t["ticket_id"]))
+                reply_markup=kb_ticket_admin(int(t["ticket_id"])),
             )
 
     @dp.callback_query(F.data == "admin:broadcast:new")
@@ -457,10 +461,10 @@ async def run():
             dbs.row_factory = aiosqlite.Row
             cur = await dbs.execute("SELECT user_id, is_whitelisted, access_until FROM users")
             rows = await cur.fetchall()
-        sent=0
+        sent = 0
         for r in rows:
-            uid=int(r["user_id"])
-            active = (r["is_whitelisted"]==1)
+            uid = int(r["user_id"])
+            active = r["is_whitelisted"] == 1
             if not active and r["access_until"]:
                 try:
                     dt = datetime.fromisoformat(r["access_until"].replace("Z", "+00:00"))
@@ -489,7 +493,7 @@ async def run():
         if m.from_user.id != cfg.admin_user_id:
             return
         await state.clear()
-        uid=int(m.text.strip())
+        uid = int(m.text.strip())
         await db.upsert_user(cfg.db_path, uid, None)
         await db.set_whitelist(cfg.db_path, uid, True)
         await m.reply("✅ Добавлен")
@@ -507,7 +511,7 @@ async def run():
         if m.from_user.id != cfg.admin_user_id:
             return
         await state.clear()
-        uid=int(m.text.strip())
+        uid = int(m.text.strip())
         await db.upsert_user(cfg.db_path, uid, None)
         await db.set_whitelist(cfg.db_path, uid, False)
         await m.reply("✅ Убран")
