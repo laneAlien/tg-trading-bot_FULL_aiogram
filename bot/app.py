@@ -69,6 +69,21 @@ async def run():
     bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
 
+    me = await bot.get_me()
+    print(
+        f"[startup] bot_id={me.id} admin_user_id={cfg.admin_user_id} "
+        f"support_group_id={cfg.support_group_id} private_channel_id={cfg.private_channel_id}"
+    )
+    if cfg.private_channel_id:
+        try:
+            private_chat = await bot.get_chat(int(cfg.private_channel_id))
+            print(
+                f"[startup] private_chat_ok id={private_chat.id} "
+                f"type={private_chat.type} title={getattr(private_chat, 'title', None)}"
+            )
+        except Exception as e:
+            print(f"[startup] private_chat_check_failed id={cfg.private_channel_id} error={e}")
+
     @dp.message(CommandStart())
     async def start(m: Message):
         await db.upsert_user(cfg.db_path, m.from_user.id, m.from_user.username)
@@ -83,6 +98,26 @@ async def run():
     @dp.message(Command("getchatid"))
     async def getchatid(m: Message):
         await m.answer(f"chat_id = {hcode(str(m.chat.id))}")
+
+    @dp.message(Command("diag"))
+    async def diag(m: Message):
+        if m.from_user.id != cfg.admin_user_id:
+            return
+        private_id = int(cfg.private_channel_id) if cfg.private_channel_id else None
+        lines = [
+            f"bot_id={hcode(str((await bot.get_me()).id))}",
+            f"support_group_id={hcode(str(cfg.support_group_id))}",
+            f"private_channel_id={hcode(str(private_id))}",
+        ]
+        if private_id is not None:
+            try:
+                chat = await bot.get_chat(private_id)
+                lines.append(
+                    f"private_chat={hcode(str(chat.id))} type={hcode(str(chat.type))} title={hcode(str(getattr(chat, 'title', None)))}"
+                )
+            except Exception as e:
+                lines.append(f"private_chat_error={hcode(str(e))}")
+        await m.answer("\n".join(lines))
 
     @dp.callback_query(F.data == "nav:back:main")
     async def back_main(cq: CallbackQuery):
