@@ -349,14 +349,26 @@ async def run():
         await cq.answer()
         if not cfg.private_channel_id:
             return await cq.message.answer("PRIVATE_CHANNEL_ID не задан в .env")
+
+        channel_id = int(cfg.private_channel_id)
         try:
-            link = await bot.create_chat_invite_link(chat_id=cfg.private_channel_id, member_limit=1)
-            await cq.message.answer(f"🔒 Приватка — одноразовая ссылка:\n{link.invite_link}")
+            chat = await bot.get_chat(channel_id)
+            # member_limit supported for supergroup, but not for channel chats
+            if chat.type == "supergroup":
+                link = await bot.create_chat_invite_link(chat_id=channel_id, member_limit=1)
+                await cq.message.answer(f"🔒 Приватка — одноразовая ссылка:\n{link.invite_link}")
+            else:
+                link = await bot.create_chat_invite_link(chat_id=channel_id)
+                await cq.message.answer(
+                    "🔒 Приватка — ссылка в канал (для каналов Telegram не поддерживает one-time member_limit):"
+                    f"\n{link.invite_link}"
+                )
         except Exception as e:
             await cq.message.answer(
-                f"❌ Не смог создать invite-link. Проверь права бота в канале.\n<code>{str(e)[:200]}</code>"
+                "❌ Не смог создать invite-link. "
+                f"chat_id=<code>{channel_id}</code>\n"
+                f"<code>{str(e)[:300]}</code>"
             )
-
     # Support
     @dp.callback_query(F.data == "main:support")
     async def support(cq: CallbackQuery):
