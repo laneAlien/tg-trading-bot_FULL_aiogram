@@ -9,11 +9,13 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.markdown import hbold, hcode
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from datetime import datetime, timezone
 import time
 import aiosqlite
 import secrets
+import logging
 
 from .config import load_config
 from . import db
@@ -102,6 +104,49 @@ async def ensure_access(cfg, cq: CallbackQuery) -> bool:
     await cq.message.answer("Доступ не активен. Открой ⭐ Доступ.", reply_markup=kb_access())
     return False
 
+
+
+
+async def issue_private_channel_invite(bot: Bot, cfg, user_id: int) -> tuple[bool, str]:
+    if not cfg.private_channel_id:
+        return False, "PRIVATE_CHANNEL_ID не задан."
+
+    channel_id = int(cfg.private_channel_id)
+    try:
+        chat = await bot.get_chat(channel_id)
+        if chat.type == "supergroup":
+            link = await bot.create_chat_invite_link(chat_id=channel_id, member_limit=1)
+        else:
+            link = await bot.create_chat_invite_link(chat_id=channel_id)
+    except TelegramBadRequest as e:
+        emsg = str(e).lower()
+        if "chat not found" in emsg:
+            return False, "Чат не найден (проверь PRIVATE_CHANNEL_ID и права бота)."
+        if "not enough rights" in emsg or "not an administrator" in emsg:
+            return False, "Бот не администратор канала/группы (нужны права на invite links)."
+        return False, f"Ошибка Telegram: {str(e)[:300]}"
+    except Exception as e:
+        return False, f"Не смог создать invite-link: {str(e)[:300]}"
+
+    await db.add_channel_invite(
+        cfg.db_path,
+        user_id=user_id,
+        chat_id=channel_id,
+        invite_link=link.invite_link,
+        invite_link_name=getattr(link, "name", None),
+        expire_date=link.expire_date.isoformat() if getattr(link, "expire_date", None) else None,
+        member_limit=getattr(link, "member_limit", None),
+        creates_join_request=bool(getattr(link, "creates_join_request", False)),
+    )
+
+    try:
+        await bot.send_message(user_id, f"🔒 Доступ одобрен. Ссылка в приватный канал:\n{link.invite_link}")
+    except TelegramForbiddenError:
+        return False, "Ссылка создана, но пользователь не начал диалог с ботом (написать /start)."
+    except TelegramBadRequest as e:
+        return False, f"Ссылка создана, но не отправлена пользователю: {str(e)[:300]}"
+
+    return True, "Ссылка в приватный канал выдана и отправлена пользователю."
 
 def mk_payload(user_id: int) -> str:
     return f"access30d:{user_id}:{int(datetime.now(timezone.utc).timestamp())}:{secrets.token_hex(4)}"
@@ -227,6 +272,10 @@ async def run():
         else:
             txt += f"access_until: {hcode(str(u.get('access_until')))}\n"
         txt += f"active_symbol: {hcode(str(u.get('active_symbol')))}"
+        if cfg.private_channel_id:
+            last_invite = await db.get_last_channel_invite(cfg.db_path, cq.from_user.id, int(cfg.private_channel_id))
+            channel_status = "ссылка выдана" if last_invite else "ссылка не выдана"
+            txt += f"\nканал: {channel_status}"
         await cq.message.edit_text(txt, reply_markup=kb_access())
 
     @dp.callback_query(F.data == "access:buy:30d")
@@ -569,28 +618,9 @@ async def run():
         if not await ensure_access(cfg, cq):
             return
         await cq.answer()
-        if not cfg.private_channel_id:
-            return await cq.message.answer("PRIVATE_CHANNEL_ID не задан в .env")
-
-        channel_id = int(cfg.private_channel_id)
-        try:
-            chat = await bot.get_chat(channel_id)
-            # member_limit supported for supergroup, but not for channel chats
-            if chat.type == "supergroup":
-                link = await bot.create_chat_invite_link(chat_id=channel_id, member_limit=1)
-                await cq.message.answer(f"🔒 Приватка — одноразовая ссылка:\n{link.invite_link}")
-            else:
-                link = await bot.create_chat_invite_link(chat_id=channel_id)
-                await cq.message.answer(
-                    "🔒 Приватка — ссылка в канал (для каналов Telegram не поддерживает one-time member_limit):"
-                    f"\n{link.invite_link}"
-                )
-        except Exception as e:
-            await cq.message.answer(
-                "❌ Не смог создать invite-link. "
-                f"chat_id=<code>{channel_id}</code>\n"
-                f"<code>{str(e)[:300]}</code>"
-            )
+        ok, msg = await issue_private_channel_invite(bot, cfg, cq.from_user.id)
+        prefix = "✅" if ok else "❌"
+        await cq.message.answer(f"{prefix} {msg}")
     # Support
     @dp.callback_query(F.data == "main:support")
     async def support(cq: CallbackQuery):
@@ -771,7 +801,8 @@ async def run():
         uid = int(m.text.strip())
         await db.upsert_user(cfg.db_path, uid, None)
         await db.set_whitelist(cfg.db_path, uid, True)
-        await m.reply("✅ Добавлен")
+        ok, msg = await issue_private_channel_invite(bot, cfg, uid)
+        await m.reply(f"✅ Добавлен в whitelist\n{'✅' if ok else '⚠️'} {msg}")
 
     @dp.callback_query(F.data == "admin:whitelist:remove")
     async def wl_remove(cq: CallbackQuery, state: FSMContext):
@@ -789,6 +820,34 @@ async def run():
         uid = int(m.text.strip())
         await db.upsert_user(cfg.db_path, uid, None)
         await db.set_whitelist(cfg.db_path, uid, False)
-        await m.reply("✅ Убран")
+
+        revoke_note = ""
+        if cfg.private_channel_id:
+            chat_id = int(cfg.private_channel_id)
+            active_invites = await db.list_active_channel_invites(cfg.db_path, uid, chat_id)
+            revoked = 0
+            for invite in active_invites:
+                try:
+                    await bot.revoke_chat_invite_link(chat_id=chat_id, invite_link=invite["invite_link"])
+                    await db.mark_channel_invite_revoked(cfg.db_path, invite["invite_link"])
+                    revoked += 1
+                except Exception:
+                    continue
+            if revoked:
+                revoke_note = f"\n🔒 Отозвано ссылок: {revoked}"
+            else:
+                revoke_note = (
+                    "\n⚠️ Старые ссылки автоматически не отозваны. "
+                    "Нужны права бота и/или дополнительная логика массового отзыва."
+                )
+
+            try:
+                await bot.ban_chat_member(chat_id=chat_id, user_id=uid)
+                await bot.unban_chat_member(chat_id=chat_id, user_id=uid, only_if_banned=True)
+                revoke_note += "\n🚫 Пользователь удалён из канала (ban+unban)."
+            except Exception as e:
+                revoke_note += f"\n⚠️ Не удалось выполнить ban+unban: {str(e)[:180]}"
+
+        await m.reply("✅ Убран" + revoke_note)
 
     await dp.start_polling(bot)
