@@ -1,4 +1,5 @@
 from aiogram import Bot, Dispatcher, F
+import asyncio
 from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -9,7 +10,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.markdown import hbold, hcode
 
 from datetime import datetime, timezone
-import logging
+import time
 import aiosqlite
 import secrets
 
@@ -42,6 +43,24 @@ from .texts import (
     TILT_TEXT,
 )
 
+def get_markets_symbols() -> set[str]:
+    now = time.time()
+    cached_symbols = _markets_cache.get("symbols")
+    if now < float(_markets_cache.get("expires_at", 0.0)) and isinstance(cached_symbols, set) and cached_symbols:
+        return cached_symbols
+
+    try:
+        import ccxt
+
+        exchange = ccxt.gateio({"enableRateLimit": True})
+        markets = exchange.load_markets()
+        symbols = set(markets.keys())
+    except Exception:
+        return cached_symbols if isinstance(cached_symbols, set) else set()
+
+    _markets_cache["symbols"] = symbols
+    _markets_cache["expires_at"] = now + MARKETS_CACHE_TTL_SECONDS
+    return symbols
 
 logger = logging.getLogger(__name__)
 
@@ -268,12 +287,17 @@ async def run():
             return
         await cq.answer()
         await state.set_state(CoinsStates.awaiting_symbol_search)
-        await cq.message.answer("Введи символ в формате <code>RAVE/USDT</code>")
+        await cq.message.answer(SYMBOL_SEARCH_HINT)
 
     @dp.message(CoinsStates.awaiting_symbol_search, F.text)
     async def coins_search_take(m: Message, state: FSMContext):
         symbol = m.text.strip().upper().replace("_", "/")
         await state.clear()
+
+        markets_symbols = await asyncio.to_thread(get_markets_symbols)
+        if symbol not in markets_symbols:
+            return await m.answer(SYMBOL_NOT_FOUND_TEXT)
+
         await db.upsert_user(cfg.db_path, m.from_user.id, m.from_user.username)
         await db.set_active_symbol(cfg.db_path, m.from_user.id, symbol)
         favs = await db.list_favorites(cfg.db_path, m.from_user.id, 200)
