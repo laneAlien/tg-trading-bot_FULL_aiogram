@@ -6,11 +6,28 @@ import pandas as pd
 from . import market_data
 
 
+EXCHANGE_IDS = ["gateio", "bybit", "mexc"]
+
+
+def _get_exchange(exchange_id: str):
+    cls = getattr(ccxt, exchange_id)
+    return cls({"enableRateLimit": True, "timeout": 10000})
+
+
 def fetch_ohlcv(symbol: str, timeframe: str, limit: int = 220) -> pd.DataFrame:
-    ohlcv = market_data.fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
-    df = pd.DataFrame(ohlcv, columns=["ts", "open", "high", "low", "close", "volume"])
-    df["dt"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
-    return df
+    last_error = None
+    for ex_id in EXCHANGE_IDS:
+        try:
+            ex = _get_exchange(ex_id)
+            ohlcv = ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+            df = pd.DataFrame(ohlcv, columns=["ts", "open", "high", "low", "close", "volume"])
+            df["dt"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
+            return df
+        except Exception as e:
+            last_error = f"{ex_id}: {e}"
+            continue
+    raise RuntimeError(last_error or "Не удалось получить OHLCV")
+
 
 
 def add_ma30(df: pd.DataFrame) -> pd.DataFrame:

@@ -11,11 +11,10 @@ from aiogram.utils.markdown import hbold, hcode
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
-from datetime import datetime, timezone
-import time
+from datetime import datetime, timezone, timedelta
 import aiosqlite
 import secrets
-import logging
+import asyncio
 
 from .config import load_config
 from . import db
@@ -26,55 +25,13 @@ from .keyboards import (
     kb_ticket_admin,
     kb_admin_panel,
     kb_coins_menu,
-    kb_regime_menu,
     kb_chart_tf,
     kb_symbol_actions,
     kb_journal,
-    kb_strategies_menu,
-    kb_checklists_menu,
 )
 from .charts import fetch_ohlcv, add_ma30, detect_regime, render_png
-from .coins import top_movers
-from .market_data import MarketDataError
-from .texts import (
-    CHECKLIST_POST,
-    CHECKLIST_PRE,
-    CHECKLIST_PROMO,
-    CHECKLIST_SAFE_MODE,
-    DECISION_BRIEF,
-    DISCLAIMER,
-    PROMO_TEXT,
-    REGIME_DETECT_RULE_TEXT,
-    REGIME_INVALIDATORS_TEXT,
-    REGIME_MENU_TEXT,
-    STRATEGIES_MENU_TEXT,
-    STRATEGY_MANUAL_1M_TEXT,
-    STRATEGY_SPOT_GRID_TEXT,
-    STRATEGY_SWING_TEXT,
-    STRATEGY_TRAILING_TEXT,
-    TILT_TEXT,
-)
-
-def get_markets_symbols() -> set[str]:
-    now = time.time()
-    cached_symbols = _markets_cache.get("symbols")
-    if now < float(_markets_cache.get("expires_at", 0.0)) and isinstance(cached_symbols, set) and cached_symbols:
-        return cached_symbols
-
-    try:
-        import ccxt
-
-        exchange = ccxt.gateio({"enableRateLimit": True})
-        markets = exchange.load_markets()
-        symbols = set(markets.keys())
-    except Exception:
-        return cached_symbols if isinstance(cached_symbols, set) else set()
-
-    _markets_cache["symbols"] = symbols
-    _markets_cache["expires_at"] = now + MARKETS_CACHE_TTL_SECONDS
-    return symbols
-
-logger = logging.getLogger(__name__)
+from .coins import top_movers, symbol_exists
+from .texts import DECISION_BRIEF, PROMO_TEXT, TILT_TEXT, CHECKLIST_PRE, CHECKLIST_POST, DISCLAIMER
 
 
 class SupportStates(StatesGroup):
@@ -105,80 +62,50 @@ async def ensure_access(cfg, cq: CallbackQuery) -> bool:
     return False
 
 
-
-
-async def issue_private_channel_invite(bot: Bot, cfg, user_id: int) -> tuple[bool, str]:
-    if not cfg.private_channel_id:
-        return False, "PRIVATE_CHANNEL_ID не задан."
-
-    channel_id = int(cfg.private_channel_id)
-    try:
-        chat = await bot.get_chat(channel_id)
-        if chat.type == "supergroup":
-            link = await bot.create_chat_invite_link(chat_id=channel_id, member_limit=1)
-        else:
-            link = await bot.create_chat_invite_link(chat_id=channel_id)
-    except TelegramBadRequest as e:
-        emsg = str(e).lower()
-        if "chat not found" in emsg:
-            return False, "Чат не найден (проверь PRIVATE_CHANNEL_ID и права бота)."
-        if "not enough rights" in emsg or "not an administrator" in emsg:
-            return False, "Бот не администратор канала/группы (нужны права на invite links)."
-        return False, f"Ошибка Telegram: {str(e)[:300]}"
-    except Exception as e:
-        return False, f"Не смог создать invite-link: {str(e)[:300]}"
-
-    await db.add_channel_invite(
-        cfg.db_path,
-        user_id=user_id,
-        chat_id=channel_id,
-        invite_link=link.invite_link,
-        invite_link_name=getattr(link, "name", None),
-        expire_date=link.expire_date.isoformat() if getattr(link, "expire_date", None) else None,
-        member_limit=getattr(link, "member_limit", None),
-        creates_join_request=bool(getattr(link, "creates_join_request", False)),
-    )
-
-    try:
-        await bot.send_message(user_id, f"🔒 Доступ одобрен. Ссылка в приватный канал:\n{link.invite_link}")
-    except TelegramForbiddenError:
-        return False, "Ссылка создана, но пользователь не начал диалог с ботом (написать /start)."
-    except TelegramBadRequest as e:
-        return False, f"Ссылка создана, но не отправлена пользователю: {str(e)[:300]}"
-
-    return True, "Ссылка в приватный канал выдана и отправлена пользователю."
-
 def mk_payload(user_id: int) -> str:
     return f"access30d:{user_id}:{int(datetime.now(timezone.utc).timestamp())}:{secrets.token_hex(4)}"
 
 
-def _fmt_ticket_short_text(text: str | None, limit: int = 80) -> str:
-    clean = (text or "").replace("\n", " ").strip()
-    if not clean:
-        return "—"
-    return clean if len(clean) <= limit else f"{clean[:limit - 1]}…"
-
-
-def _fmt_ticket_dt(dt_iso: str | None) -> str:
-    if not dt_iso:
-        return "—"
+def _parse_dt(dt_raw: str | None) -> datetime | None:
+    if not dt_raw:
+        return None
     try:
-        dt = datetime.fromisoformat(dt_iso.replace("Z", "+00:00"))
-        return dt.strftime("%Y-%m-%d %H:%M UTC")
+        return datetime.fromisoformat(dt_raw.replace("Z", "+00:00"))
     except Exception:
-        return dt_iso
+        return None
 
 
-def _kb_support_mine_page(offset: int, total: int, limit: int):
-    b = InlineKeyboardBuilder()
-    if offset > 0:
-        prev_offset = max(0, offset - limit)
-        b.button(text="⬅️ Назад", callback_data=f"support:mine:{prev_offset}")
-    if offset + limit < total:
-        b.button(text="➡️ Далее", callback_data=f"support:mine:{offset + limit}")
-    b.button(text="🆘 Поддержка", callback_data="main:support")
-    b.adjust(2, 1)
-    return b.as_markup()
+async def maybe_send_expiry_notice(bot: Bot, cfg, user_id: int) -> None:
+    user = await db.get_user(cfg.db_path, user_id)
+    if not user or user.get("is_whitelisted") == 1:
+        return
+    expires_at = _parse_dt(user.get("access_until"))
+    if not expires_at:
+        return
+    left = expires_at - datetime.now(timezone.utc)
+    if left <= timedelta(0) or left > timedelta(hours=48):
+        return
+    reminded_at = _parse_dt(user.get("reminder_sent_at"))
+    if reminded_at and datetime.now(timezone.utc) - reminded_at < timedelta(hours=20):
+        return
+    hours_left = max(1, int(left.total_seconds() // 3600))
+    await bot.send_message(
+        user_id,
+        f"⏰ Подписка заканчивается через {hours_left} ч.\nПродли в разделе ⭐ Доступ.",
+        reply_markup=kb_access(),
+    )
+    await db.mark_reminder_sent(cfg.db_path, user_id)
+
+
+async def expiry_reminder_loop(bot: Bot, cfg):
+    while True:
+        try:
+            users = await db.list_users_for_expiry_reminder(cfg.db_path, within_hours=48)
+            for u in users:
+                await maybe_send_expiry_notice(bot, cfg, int(u["user_id"]))
+        except Exception as e:
+            print(f"[reminder_loop] error={e}")
+        await asyncio.sleep(6 * 60 * 60)
 
 
 async def run():
@@ -203,9 +130,12 @@ async def run():
         except Exception as e:
             print(f"[startup] private_chat_check_failed id={cfg.private_channel_id} error={e}")
 
+    asyncio.create_task(expiry_reminder_loop(bot, cfg))
+
     @dp.message(CommandStart())
     async def start(m: Message):
         await db.upsert_user(cfg.db_path, m.from_user.id, m.from_user.username)
+        await maybe_send_expiry_notice(bot, cfg, m.from_user.id)
         await m.answer("🏠 Главное меню\n\n⚠️ Не финсовет.", reply_markup=kb_main())
 
     @dp.message(Command("admin"))
@@ -253,10 +183,14 @@ async def run():
     @dp.callback_query(F.data == "access:disclaimer")
     async def disclaimer(cq: CallbackQuery):
         await cq.answer()
-        await cq.message.edit_text(DISCLAIMER + "\n\nНажми ✅ Я согласен.", reply_markup=kb_access())
+        await cq.message.edit_text(DISCLAIMER + "\n\nПодтверди согласие кнопкой ниже.", reply_markup=kb_access(show_agree=True))
 
     @dp.callback_query(F.data == "access:disclaimer:agree")
     async def disclaimer_agree(cq: CallbackQuery):
+        u = await db.get_user(cfg.db_path, cq.from_user.id) or {}
+        if u.get("accepted_disclaimer_at"):
+            await cq.answer("Уже подтверждено")
+            return await cq.message.edit_text("✅ Дисклеймер уже принят ранее.", reply_markup=kb_access())
         await cq.answer("Ок")
         await db.set_disclaimer(cfg.db_path, cq.from_user.id)
         await cq.message.edit_text("✅ Согласие сохранено. Теперь можно купить доступ.", reply_markup=kb_access())
@@ -272,10 +206,7 @@ async def run():
         else:
             txt += f"access_until: {hcode(str(u.get('access_until')))}\n"
         txt += f"active_symbol: {hcode(str(u.get('active_symbol')))}"
-        if cfg.private_channel_id:
-            last_invite = await db.get_last_channel_invite(cfg.db_path, cq.from_user.id, int(cfg.private_channel_id))
-            channel_status = "ссылка выдана" if last_invite else "ссылка не выдана"
-            txt += f"\nканал: {channel_status}"
+        await maybe_send_expiry_notice(bot, cfg, cq.from_user.id)
         await cq.message.edit_text(txt, reply_markup=kb_access())
 
     @dp.callback_query(F.data == "access:buy:30d")
@@ -323,8 +254,14 @@ async def run():
             )
             return
         await db.mark_payment_paid(cfg.db_path, payload)
-        await db.grant_access_30d(cfg.db_path, m.from_user.id)
+        until = await db.grant_access_30d(cfg.db_path, m.from_user.id)
         await m.answer("✅ Оплата получена. Доступ активен на 30 дней.", reply_markup=kb_main())
+        await m.answer(
+            "🧾 Квитанция\n"
+            f"Сумма: {hcode(str(expected))} Stars\n"
+            f"Подписка до: {hcode(until[:19])}\n"
+            f"Платёж: {hcode(payload)}"
+        )
 
     # Help
     @dp.callback_query(F.data == "main:help")
@@ -346,11 +283,7 @@ async def run():
             return
         await cq.answer("Считаю...")
         direction = "gainers" if cq.data.endswith("gainers") else "losers"
-        try:
-            movers = top_movers(limit=10, direction=direction)
-        except MarketDataError as exc:
-            logger.exception("Coins movers failed: direction=%s details=%s", direction, exc.details)
-            return await cq.message.answer(f"❌ {exc.user_message}")
+        movers = top_movers(limit=10, direction=direction)
         lines = [f"{i+1}) <code>{sym}</code>  {pct:+.2f}%" for i, (sym, pct) in enumerate(movers)]
         await cq.message.answer(
             ("📈 Топ рост\n" if direction == "gainers" else "📉 Топ падение\n")
@@ -375,17 +308,14 @@ async def run():
             return
         await cq.answer()
         await state.set_state(CoinsStates.awaiting_symbol_search)
-        await cq.message.answer(SYMBOL_SEARCH_HINT)
+        await cq.message.edit_text("Введи символ в формате <code>RAVE/USDT</code>")
 
     @dp.message(CoinsStates.awaiting_symbol_search, F.text)
     async def coins_search_take(m: Message, state: FSMContext):
         symbol = m.text.strip().upper().replace("_", "/")
         await state.clear()
-
-        markets_symbols = await asyncio.to_thread(get_markets_symbols)
-        if symbol not in markets_symbols:
-            return await m.answer(SYMBOL_NOT_FOUND_TEXT)
-
+        if not symbol_exists(symbol):
+            return await m.answer("❌ Пара не найдена на доступных биржах. Пример: <code>BTC/USDT</code>")
         await db.upsert_user(cfg.db_path, m.from_user.id, m.from_user.username)
         await db.set_active_symbol(cfg.db_path, m.from_user.id, symbol)
         favs = await db.list_favorites(cfg.db_path, m.from_user.id, 200)
@@ -424,50 +354,6 @@ async def run():
         if not await ensure_access(cfg, cq):
             return
         await cq.answer()
-        await cq.message.edit_text(REGIME_MENU_TEXT, reply_markup=kb_regime_menu())
-
-    @dp.callback_query(F.data == "regime:detect")
-    async def regime_detect(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq):
-            return
-        await cq.answer("Считаю режим...")
-        u = await db.get_user(cfg.db_path, cq.from_user.id) or {}
-        symbol = u.get("active_symbol") or "RAVE/USDT"
-        try:
-            df = add_ma30(fetch_ohlcv(symbol, "15m"))
-            reg = detect_regime(df)
-        except MarketDataError as exc:
-            logger.exception("Regime detect market data failed: symbol=%s details=%s", symbol, exc.details)
-            return await cq.message.answer(f"❌ {exc.user_message}")
-        except Exception:
-            logger.exception("Regime detect failed: symbol=%s", symbol)
-            return await cq.message.answer("❌ Не удалось рассчитать режим. Попробуйте позже.")
-
-        next_step_map = {
-            "TREND": "Что делать дальше: работай от тренда через Trailing/Swing.",
-            "RANGE": "Что делать дальше: работай в боковике через Spot Grid.",
-            "WEAKNESS": "Что делать дальше: включай защитный режим и выходи в USDT.",
-        }
-        next_step = next_step_map.get(reg, "Что делать дальше: дождись более явного режима на 15m.")
-        text = (
-            f"📍 Режим на 15m MA30 для <code>{symbol}</code>: <b>{reg}</b>\n\n"
-            f"{REGIME_DETECT_RULE_TEXT}\n\n"
-            f"{next_step}"
-        )
-        await cq.message.answer(text, reply_markup=kb_regime_menu())
-
-    @dp.callback_query(F.data == "regime:invalidators")
-    async def regime_invalidators(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq):
-            return
-        await cq.answer()
-        await cq.message.answer(REGIME_INVALIDATORS_TEXT, reply_markup=kb_regime_menu())
-
-    @dp.callback_query(F.data == "regime:tfs")
-    async def regime_tfs(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq):
-            return
-        await cq.answer()
         await cq.message.edit_text("📊 Выбери TF", reply_markup=kb_chart_tf())
 
     @dp.callback_query(F.data.startswith("chart:tf:"))
@@ -482,12 +368,8 @@ async def run():
             df = add_ma30(fetch_ohlcv(symbol, tf))
             reg = detect_regime(df)
             png = render_png(df, f"{symbol} • {tf} • MA30 • {reg}")
-        except MarketDataError as exc:
-            logger.exception("Chart market data failed: symbol=%s timeframe=%s details=%s", symbol, tf, exc.details)
-            return await cq.message.answer(f"❌ {exc.user_message}")
-        except Exception:
-            logger.exception("Chart rendering failed: symbol=%s timeframe=%s", symbol, tf)
-            return await cq.message.answer("❌ Не удалось построить график. Попробуйте позже.")
+        except Exception as e:
+            return await cq.message.answer(f"❌ Не удалось построить график.\n<code>{str(e)[:240]}</code>")
         await cq.message.answer_photo(
             photo=png,
             caption=f"{hbold(symbol)} • {hcode(tf)}\nРежим: {hbold(reg)}\n\n{DECISION_BRIEF}",
@@ -514,70 +396,14 @@ async def run():
         if not await ensure_access(cfg, cq):
             return
         await cq.answer()
-        await cq.message.edit_text("✅ Чеклисты", reply_markup=kb_checklists_menu())
-
-    @dp.callback_query(F.data == "checklists:pre")
-    async def checklists_pre(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq):
-            return
-        await cq.answer()
-        await cq.message.answer(CHECKLIST_PRE, reply_markup=kb_checklists_menu())
-
-    @dp.callback_query(F.data == "checklists:post")
-    async def checklists_post(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq):
-            return
-        await cq.answer()
-        await cq.message.answer(CHECKLIST_POST, reply_markup=kb_checklists_menu())
-
-    @dp.callback_query(F.data == "checklists:promo")
-    async def checklists_promo(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq):
-            return
-        await cq.answer()
-        await cq.message.answer(CHECKLIST_PROMO, reply_markup=kb_checklists_menu())
-
-    @dp.callback_query(F.data == "checklists:safe_mode")
-    async def checklists_safe_mode(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq):
-            return
-        await cq.answer()
-        await cq.message.answer(CHECKLIST_SAFE_MODE, reply_markup=kb_checklists_menu())
+        await cq.message.answer(CHECKLIST_PRE + "\n\n" + CHECKLIST_POST)
 
     @dp.callback_query(F.data == "main:strategies")
     async def strategies(cq: CallbackQuery):
         if not await ensure_access(cfg, cq):
             return
         await cq.answer()
-        await cq.message.edit_text(STRATEGIES_MENU_TEXT, reply_markup=kb_strategies_menu())
-
-    @dp.callback_query(F.data == "strategies:spot_grid")
-    async def strategy_spot_grid(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq):
-            return
-        await cq.answer()
-        await cq.message.answer(STRATEGY_SPOT_GRID_TEXT, reply_markup=kb_strategies_menu())
-
-    @dp.callback_query(F.data == "strategies:trailing")
-    async def strategy_trailing(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq):
-            return
-        await cq.answer()
-        await cq.message.answer(STRATEGY_TRAILING_TEXT, reply_markup=kb_strategies_menu())
-
-    @dp.callback_query(F.data == "strategies:swing")
-    async def strategy_swing(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq):
-            return
-        await cq.answer()
-        await cq.message.answer(STRATEGY_SWING_TEXT, reply_markup=kb_strategies_menu())
-
-    @dp.callback_query(F.data == "strategies:manual_1m")
-    async def strategy_manual_1m(cq: CallbackQuery):
-        if not await ensure_access(cfg, cq):
-            return
-        await cq.answer()
-        await cq.message.answer(STRATEGY_MANUAL_1M_TEXT, reply_markup=kb_strategies_menu())
+        await cq.message.answer("⚙️ Стратегии\n\n" + DECISION_BRIEF)
 
     # Journal
     @dp.callback_query(F.data == "main:journal")
@@ -618,9 +444,28 @@ async def run():
         if not await ensure_access(cfg, cq):
             return
         await cq.answer()
-        ok, msg = await issue_private_channel_invite(bot, cfg, cq.from_user.id)
-        prefix = "✅" if ok else "❌"
-        await cq.message.answer(f"{prefix} {msg}")
+        if not cfg.private_channel_id:
+            return await cq.message.answer("PRIVATE_CHANNEL_ID не задан в .env")
+
+        channel_id = int(cfg.private_channel_id)
+        try:
+            chat = await bot.get_chat(channel_id)
+            # member_limit supported for supergroup, but not for channel chats
+            if chat.type == "supergroup":
+                link = await bot.create_chat_invite_link(chat_id=channel_id, member_limit=1)
+                await cq.message.answer(f"🔒 Приватка — одноразовая ссылка:\n{link.invite_link}")
+            else:
+                link = await bot.create_chat_invite_link(chat_id=channel_id)
+                await cq.message.answer(
+                    "🔒 Приватка — ссылка в канал (для каналов Telegram не поддерживает one-time member_limit):"
+                    f"\n{link.invite_link}"
+                )
+        except Exception as e:
+            await cq.message.answer(
+                "❌ Не смог создать invite-link. "
+                f"chat_id=<code>{channel_id}</code>\n"
+                f"<code>{str(e)[:300]}</code>"
+            )
     # Support
     @dp.callback_query(F.data == "main:support")
     async def support(cq: CallbackQuery):

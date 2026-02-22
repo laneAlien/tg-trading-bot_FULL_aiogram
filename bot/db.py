@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS users (
   is_whitelisted INTEGER NOT NULL DEFAULT 0,
   access_until TEXT,
   active_symbol TEXT,
-  accepted_disclaimer_at TEXT
+  accepted_disclaimer_at TEXT,
+  reminder_sent_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS favorites (
@@ -68,13 +69,20 @@ CREATE TABLE IF NOT EXISTS channel_invites (
 );
 """
 
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
 
 async def init_db(db_path: str) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.executescript(SCHEMA)
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN reminder_sent_at TEXT")
+        except Exception:
+            pass
         await db.commit()
+
 
 async def upsert_user(db_path: str, user_id: int, username: str | None) -> None:
     async with aiosqlite.connect(db_path) as db:
@@ -88,15 +96,18 @@ async def upsert_user(db_path: str, user_id: int, username: str | None) -> None:
         )
         await db.commit()
 
+
 async def set_disclaimer(db_path: str, user_id: int) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute("UPDATE users SET accepted_disclaimer_at=? WHERE user_id=?", (now_iso(), user_id))
         await db.commit()
 
+
 async def set_active_symbol(db_path: str, user_id: int, symbol: str) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute("UPDATE users SET active_symbol=? WHERE user_id=?", (symbol, user_id))
         await db.commit()
+
 
 async def get_user(db_path: str, user_id: int) -> dict | None:
     async with aiosqlite.connect(db_path) as db:
@@ -104,6 +115,7 @@ async def get_user(db_path: str, user_id: int) -> dict | None:
         cur = await db.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
         row = await cur.fetchone()
         return dict(row) if row else None
+
 
 async def is_access_active(db_path: str, user_id: int) -> bool:
     u = await get_user(db_path, user_id)
@@ -120,16 +132,42 @@ async def is_access_active(db_path: str, user_id: int) -> bool:
         return False
     return dt > datetime.now(timezone.utc)
 
-async def grant_access_30d(db_path: str, user_id: int) -> None:
+
+async def grant_access_30d(db_path: str, user_id: int) -> str:
     until = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
     async with aiosqlite.connect(db_path) as db:
-        await db.execute("UPDATE users SET access_until=? WHERE user_id=?", (until, user_id))
+        await db.execute("UPDATE users SET access_until=?, reminder_sent_at=NULL WHERE user_id=?", (until, user_id))
         await db.commit()
+    return until
+
 
 async def set_whitelist(db_path: str, user_id: int, value: bool) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute("UPDATE users SET is_whitelisted=? WHERE user_id=?", (1 if value else 0, user_id))
         await db.commit()
+
+
+async def mark_reminder_sent(db_path: str, user_id: int) -> None:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("UPDATE users SET reminder_sent_at=? WHERE user_id=?", (now_iso(), user_id))
+        await db.commit()
+
+
+async def list_users_for_expiry_reminder(db_path: str, within_hours: int = 48) -> list[dict]:
+    border = (datetime.now(timezone.utc) + timedelta(hours=within_hours)).isoformat()
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT user_id, access_until, reminder_sent_at, is_whitelisted
+            FROM users
+            WHERE is_whitelisted=0 AND access_until IS NOT NULL AND access_until <= ?
+            """,
+            (border,),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
 
 # Favorites
 async def add_favorite(db_path: str, user_id: int, symbol: str) -> None:
@@ -140,16 +178,19 @@ async def add_favorite(db_path: str, user_id: int, symbol: str) -> None:
         )
         await db.commit()
 
+
 async def remove_favorite(db_path: str, user_id: int, symbol: str) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute("DELETE FROM favorites WHERE user_id=? AND symbol=?", (user_id, symbol))
         await db.commit()
+
 
 async def list_favorites(db_path: str, user_id: int, limit: int = 30) -> list[str]:
     async with aiosqlite.connect(db_path) as db:
         cur = await db.execute("SELECT symbol FROM favorites WHERE user_id=? ORDER BY created_at DESC LIMIT ?", (user_id, limit))
         rows = await cur.fetchall()
         return [r[0] for r in rows]
+
 
 # Tickets
 async def create_ticket(db_path: str, user_id: int, text: str) -> int:
@@ -166,6 +207,7 @@ async def create_ticket(db_path: str, user_id: int, text: str) -> int:
         await db.commit()
         return int(ticket_id)
 
+
 async def add_ticket_message(db_path: str, ticket_id: int, sender: str, text: str) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
@@ -174,10 +216,12 @@ async def add_ticket_message(db_path: str, ticket_id: int, sender: str, text: st
         )
         await db.commit()
 
+
 async def close_ticket(db_path: str, ticket_id: int) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute("UPDATE tickets SET status='closed', closed_at=? WHERE ticket_id=?", (now_iso(), ticket_id))
         await db.commit()
+
 
 async def get_open_tickets(db_path: str, limit: int = 20) -> list[dict]:
     async with aiosqlite.connect(db_path) as db:
@@ -186,43 +230,6 @@ async def get_open_tickets(db_path: str, limit: int = 20) -> list[dict]:
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-async def list_user_tickets(db_path: str, user_id: int, limit: int = 5, offset: int = 0) -> list[dict]:
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            """
-            SELECT ticket_id, status, created_at, closed_at
-            FROM tickets
-            WHERE user_id=?
-            ORDER BY ticket_id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (user_id, limit, offset),
-        )
-        rows = await cur.fetchall()
-        return [dict(r) for r in rows]
-
-async def count_user_tickets(db_path: str, user_id: int) -> int:
-    async with aiosqlite.connect(db_path) as db:
-        cur = await db.execute("SELECT COUNT(*) FROM tickets WHERE user_id=?", (user_id,))
-        row = await cur.fetchone()
-        return int(row[0] if row else 0)
-
-async def get_ticket_messages(db_path: str, ticket_id: int, limit: int = 1) -> list[dict]:
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            """
-            SELECT sender, text, created_at
-            FROM ticket_messages
-            WHERE ticket_id=?
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (ticket_id, limit),
-        )
-        rows = await cur.fetchall()
-        return [dict(r) for r in rows]
 
 # Journal
 async def add_journal(db_path: str, user_id: int, text: str) -> None:
@@ -233,7 +240,8 @@ async def add_journal(db_path: str, user_id: int, text: str) -> None:
         )
         await db.commit()
 
-async def list_journal(db_path: str, user_id: int, limit: int = 20) -> list[tuple[str,str]]:
+
+async def list_journal(db_path: str, user_id: int, limit: int = 20) -> list[tuple[str, str]]:
     async with aiosqlite.connect(db_path) as db:
         cur = await db.execute(
             "SELECT created_at, text FROM journal_entries WHERE user_id=? ORDER BY id DESC LIMIT ?",
@@ -241,6 +249,7 @@ async def list_journal(db_path: str, user_id: int, limit: int = 20) -> list[tupl
         )
         rows = await cur.fetchall()
         return [(r[0], r[1]) for r in rows]
+
 
 # Payments
 async def create_payment(db_path: str, user_id: int, payload: str, stars_amount: int) -> None:
@@ -251,10 +260,12 @@ async def create_payment(db_path: str, user_id: int, payload: str, stars_amount:
         )
         await db.commit()
 
+
 async def mark_payment_paid(db_path: str, payload: str) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute("UPDATE payments SET status='paid', paid_at=? WHERE payload=?", (now_iso(), payload))
         await db.commit()
+
 
 async def get_payment(db_path: str, payload: str) -> dict | None:
     async with aiosqlite.connect(db_path) as db:
