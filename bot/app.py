@@ -28,6 +28,7 @@ from .keyboards import (
     kb_symbol_actions,
     kb_journal,
     kb_strategies_menu,
+    kb_checklists_menu,
 )
 from .charts import fetch_ohlcv, add_ma30, detect_regime, render_png
 from .coins import top_movers
@@ -35,6 +36,8 @@ from .market_data import MarketDataError
 from .texts import (
     CHECKLIST_POST,
     CHECKLIST_PRE,
+    CHECKLIST_PROMO,
+    CHECKLIST_SAFE_MODE,
     DECISION_BRIEF,
     DISCLAIMER,
     PROMO_TEXT,
@@ -432,7 +435,35 @@ async def run():
         if not await ensure_access(cfg, cq):
             return
         await cq.answer()
-        await cq.message.answer(CHECKLIST_PRE + "\n\n" + CHECKLIST_POST)
+        await cq.message.edit_text("✅ Чеклисты", reply_markup=kb_checklists_menu())
+
+    @dp.callback_query(F.data == "checklists:pre")
+    async def checklists_pre(cq: CallbackQuery):
+        if not await ensure_access(cfg, cq):
+            return
+        await cq.answer()
+        await cq.message.answer(CHECKLIST_PRE, reply_markup=kb_checklists_menu())
+
+    @dp.callback_query(F.data == "checklists:post")
+    async def checklists_post(cq: CallbackQuery):
+        if not await ensure_access(cfg, cq):
+            return
+        await cq.answer()
+        await cq.message.answer(CHECKLIST_POST, reply_markup=kb_checklists_menu())
+
+    @dp.callback_query(F.data == "checklists:promo")
+    async def checklists_promo(cq: CallbackQuery):
+        if not await ensure_access(cfg, cq):
+            return
+        await cq.answer()
+        await cq.message.answer(CHECKLIST_PROMO, reply_markup=kb_checklists_menu())
+
+    @dp.callback_query(F.data == "checklists:safe_mode")
+    async def checklists_safe_mode(cq: CallbackQuery):
+        if not await ensure_access(cfg, cq):
+            return
+        await cq.answer()
+        await cq.message.answer(CHECKLIST_SAFE_MODE, reply_markup=kb_checklists_menu())
 
     @dp.callback_query(F.data == "main:strategies")
     async def strategies(cq: CallbackQuery):
