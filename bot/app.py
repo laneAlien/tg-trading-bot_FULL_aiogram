@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.markdown import hbold, hcode
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from datetime import datetime, timezone
 import time
@@ -104,6 +105,35 @@ async def ensure_access(cfg, cq: CallbackQuery) -> bool:
 
 def mk_payload(user_id: int) -> str:
     return f"access30d:{user_id}:{int(datetime.now(timezone.utc).timestamp())}:{secrets.token_hex(4)}"
+
+
+def _fmt_ticket_short_text(text: str | None, limit: int = 80) -> str:
+    clean = (text or "").replace("\n", " ").strip()
+    if not clean:
+        return "—"
+    return clean if len(clean) <= limit else f"{clean[:limit - 1]}…"
+
+
+def _fmt_ticket_dt(dt_iso: str | None) -> str:
+    if not dt_iso:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(dt_iso.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M UTC")
+    except Exception:
+        return dt_iso
+
+
+def _kb_support_mine_page(offset: int, total: int, limit: int):
+    b = InlineKeyboardBuilder()
+    if offset > 0:
+        prev_offset = max(0, offset - limit)
+        b.button(text="⬅️ Назад", callback_data=f"support:mine:{prev_offset}")
+    if offset + limit < total:
+        b.button(text="➡️ Далее", callback_data=f"support:mine:{offset + limit}")
+    b.button(text="🆘 Поддержка", callback_data="main:support")
+    b.adjust(2, 1)
+    return b.as_markup()
 
 
 async def run():
@@ -576,6 +606,47 @@ async def run():
         await cq.answer()
         await state.set_state(SupportStates.waiting_ticket_text)
         await cq.message.answer("Опиши проблему одним сообщением.")
+
+    @dp.callback_query(F.data == "support:mine")
+    @dp.callback_query(F.data.startswith("support:mine:"))
+    async def support_mine(cq: CallbackQuery):
+        if not await ensure_access(cfg, cq):
+            return
+        offset = 0
+        if cq.data.startswith("support:mine:"):
+            try:
+                offset = max(0, int(cq.data.rsplit(":", 1)[1]))
+            except ValueError:
+                offset = 0
+        limit = 5
+        await cq.answer()
+
+        tickets = await db.list_user_tickets(cfg.db_path, cq.from_user.id, limit=limit, offset=offset)
+        total = await db.count_user_tickets(cfg.db_path, cq.from_user.id)
+
+        if not tickets:
+            return await cq.message.answer("У тебя пока нет тикетов.", reply_markup=kb_support())
+
+        lines = [f"🧾 Твои тикеты ({offset + 1}-{min(offset + len(tickets), total)} из {total})", ""]
+        for t in tickets:
+            status = "🟢 open" if t["status"] == "open" else "⚫ closed"
+            preview = "—"
+            messages = await db.get_ticket_messages(cfg.db_path, int(t["ticket_id"]), limit=1)
+            if messages:
+                preview = _fmt_ticket_short_text(messages[0].get("text"))
+            lines.extend(
+                [
+                    f"<b>#{t['ticket_id']}</b> • {status}",
+                    f"Дата: <code>{_fmt_ticket_dt(t.get('created_at'))}</code>",
+                    f"Текст: {hcode(preview)}",
+                    "",
+                ]
+            )
+
+        await cq.message.answer(
+            "\n".join(lines).rstrip(),
+            reply_markup=_kb_support_mine_page(offset=offset, total=total, limit=limit),
+        )
 
     @dp.message(SupportStates.waiting_ticket_text, F.text)
     async def support_take(m: Message, state: FSMContext):

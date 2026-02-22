@@ -173,6 +173,44 @@ async def get_open_tickets(db_path: str, limit: int = 20) -> list[dict]:
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
+async def list_user_tickets(db_path: str, user_id: int, limit: int = 5, offset: int = 0) -> list[dict]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT ticket_id, status, created_at, closed_at
+            FROM tickets
+            WHERE user_id=?
+            ORDER BY ticket_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, limit, offset),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+async def count_user_tickets(db_path: str, user_id: int) -> int:
+    async with aiosqlite.connect(db_path) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM tickets WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+        return int(row[0] if row else 0)
+
+async def get_ticket_messages(db_path: str, ticket_id: int, limit: int = 1) -> list[dict]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT sender, text, created_at
+            FROM ticket_messages
+            WHERE ticket_id=?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (ticket_id, limit),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
 # Journal
 async def add_journal(db_path: str, user_id: int, text: str) -> None:
     async with aiosqlite.connect(db_path) as db:

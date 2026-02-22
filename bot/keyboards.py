@@ -33,8 +33,9 @@ def kb_access() -> InlineKeyboardMarkup:
 def kb_support() -> InlineKeyboardMarkup:
     b=InlineKeyboardBuilder()
     b.button(text="✉️ Создать тикет", callback_data="support:new")
+    b.button(text="📂 Мои тикеты", callback_data="support:mine")
     b.button(text="⬅️ Назад", callback_data="nav:back:main")
-    b.adjust(1,1)
+    b.adjust(1,1,1)
     return b.as_markup()
 
 def kb_ticket_admin(ticket_id: int) -> InlineKeyboardMarkup:
