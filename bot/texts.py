@@ -45,3 +45,10 @@ DISCLAIMER = (
 "— Риски на тебе.\n"
 "— Бот даёт подсказки по алгоритмам, не гарантирует прибыль."
 )
+
+SYMBOL_SEARCH_HINT = (
+"Введи пару в формате <code>BASE/QUOTE</code>.\n"
+"Пример: <code>BTC/USDT</code>, <code>ETH/USDT</code>"
+)
+
+SYMBOL_NOT_FOUND_TEXT = "❌ Пара не найдена, примеры: BTC/USDT, ETH/USDT"

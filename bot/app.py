@@ -1,4 +1,5 @@
 from aiogram import Bot, Dispatcher, F
+import asyncio
 from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -9,6 +10,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.markdown import hbold, hcode
 
 from datetime import datetime, timezone
+import time
 import aiosqlite
 import secrets
 
@@ -27,8 +29,42 @@ from .keyboards import (
 )
 from .charts import fetch_ohlcv, add_ma30, detect_regime, render_png
 from .coins import top_movers
-from .texts import DECISION_BRIEF, PROMO_TEXT, TILT_TEXT, CHECKLIST_PRE, CHECKLIST_POST, DISCLAIMER
+from .texts import (
+    DECISION_BRIEF,
+    PROMO_TEXT,
+    TILT_TEXT,
+    CHECKLIST_PRE,
+    CHECKLIST_POST,
+    DISCLAIMER,
+    SYMBOL_NOT_FOUND_TEXT,
+    SYMBOL_SEARCH_HINT,
+)
 
+
+
+
+MARKETS_CACHE_TTL_SECONDS = 600
+_markets_cache: dict[str, object] = {"expires_at": 0.0, "symbols": set()}
+
+
+def get_markets_symbols() -> set[str]:
+    now = time.time()
+    cached_symbols = _markets_cache.get("symbols")
+    if now < float(_markets_cache.get("expires_at", 0.0)) and isinstance(cached_symbols, set) and cached_symbols:
+        return cached_symbols
+
+    try:
+        import ccxt
+
+        exchange = ccxt.gateio({"enableRateLimit": True})
+        markets = exchange.load_markets()
+        symbols = set(markets.keys())
+    except Exception:
+        return cached_symbols if isinstance(cached_symbols, set) else set()
+
+    _markets_cache["symbols"] = symbols
+    _markets_cache["expires_at"] = now + MARKETS_CACHE_TTL_SECONDS
+    return symbols
 
 class SupportStates(StatesGroup):
     waiting_ticket_text = State()
@@ -248,12 +284,17 @@ async def run():
             return
         await cq.answer()
         await state.set_state(CoinsStates.awaiting_symbol_search)
-        await cq.message.answer("Введи символ в формате <code>RAVE/USDT</code>")
+        await cq.message.answer(SYMBOL_SEARCH_HINT)
 
     @dp.message(CoinsStates.awaiting_symbol_search, F.text)
     async def coins_search_take(m: Message, state: FSMContext):
         symbol = m.text.strip().upper().replace("_", "/")
         await state.clear()
+
+        markets_symbols = await asyncio.to_thread(get_markets_symbols)
+        if symbol not in markets_symbols:
+            return await m.answer(SYMBOL_NOT_FOUND_TEXT)
+
         await db.upsert_user(cfg.db_path, m.from_user.id, m.from_user.username)
         await db.set_active_symbol(cfg.db_path, m.from_user.id, symbol)
         favs = await db.list_favorites(cfg.db_path, m.from_user.id, 200)
