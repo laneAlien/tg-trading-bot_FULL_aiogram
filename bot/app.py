@@ -22,6 +22,7 @@ from .keyboards import (
     kb_ticket_admin,
     kb_admin_panel,
     kb_coins_menu,
+    kb_regime_menu,
     kb_chart_tf,
     kb_symbol_actions,
     kb_journal,
@@ -29,7 +30,17 @@ from .keyboards import (
 from .charts import fetch_ohlcv, add_ma30, detect_regime, render_png
 from .coins import top_movers
 from .market_data import MarketDataError
-from .texts import DECISION_BRIEF, PROMO_TEXT, TILT_TEXT, CHECKLIST_PRE, CHECKLIST_POST, DISCLAIMER
+from .texts import (
+    CHECKLIST_POST,
+    CHECKLIST_PRE,
+    DECISION_BRIEF,
+    DISCLAIMER,
+    PROMO_TEXT,
+    REGIME_DETECT_RULE_TEXT,
+    REGIME_INVALIDATORS_TEXT,
+    REGIME_MENU_TEXT,
+    TILT_TEXT,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -298,6 +309,50 @@ async def run():
     # Regime/Charts
     @dp.callback_query(F.data == "main:regime")
     async def regime(cq: CallbackQuery):
+        if not await ensure_access(cfg, cq):
+            return
+        await cq.answer()
+        await cq.message.edit_text(REGIME_MENU_TEXT, reply_markup=kb_regime_menu())
+
+    @dp.callback_query(F.data == "regime:detect")
+    async def regime_detect(cq: CallbackQuery):
+        if not await ensure_access(cfg, cq):
+            return
+        await cq.answer("Считаю режим...")
+        u = await db.get_user(cfg.db_path, cq.from_user.id) or {}
+        symbol = u.get("active_symbol") or "RAVE/USDT"
+        try:
+            df = add_ma30(fetch_ohlcv(symbol, "15m"))
+            reg = detect_regime(df)
+        except MarketDataError as exc:
+            logger.exception("Regime detect market data failed: symbol=%s details=%s", symbol, exc.details)
+            return await cq.message.answer(f"❌ {exc.user_message}")
+        except Exception:
+            logger.exception("Regime detect failed: symbol=%s", symbol)
+            return await cq.message.answer("❌ Не удалось рассчитать режим. Попробуйте позже.")
+
+        next_step_map = {
+            "TREND": "Что делать дальше: работай от тренда через Trailing/Swing.",
+            "RANGE": "Что делать дальше: работай в боковике через Spot Grid.",
+            "WEAKNESS": "Что делать дальше: включай защитный режим и выходи в USDT.",
+        }
+        next_step = next_step_map.get(reg, "Что делать дальше: дождись более явного режима на 15m.")
+        text = (
+            f"📍 Режим на 15m MA30 для <code>{symbol}</code>: <b>{reg}</b>\n\n"
+            f"{REGIME_DETECT_RULE_TEXT}\n\n"
+            f"{next_step}"
+        )
+        await cq.message.answer(text, reply_markup=kb_regime_menu())
+
+    @dp.callback_query(F.data == "regime:invalidators")
+    async def regime_invalidators(cq: CallbackQuery):
+        if not await ensure_access(cfg, cq):
+            return
+        await cq.answer()
+        await cq.message.answer(REGIME_INVALIDATORS_TEXT, reply_markup=kb_regime_menu())
+
+    @dp.callback_query(F.data == "regime:tfs")
+    async def regime_tfs(cq: CallbackQuery):
         if not await ensure_access(cfg, cq):
             return
         await cq.answer()
