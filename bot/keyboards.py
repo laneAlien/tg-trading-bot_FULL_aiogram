@@ -73,6 +73,16 @@ def kb_symbol_actions(symbol: str, is_fav: bool) -> InlineKeyboardMarkup:
     b.adjust(1,1,1,1)
     return b.as_markup()
 
+
+def kb_regime_menu() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="🧠 Определить режим (15m MA30)", callback_data="regime:detect")
+    b.button(text="🚫 Инвалидаторы идеи", callback_data="regime:invalidators")
+    b.button(text="📊 График по TF", callback_data="regime:tfs")
+    b.button(text="⬅️ Назад", callback_data="nav:back:main")
+    b.adjust(1, 1, 1, 1)
+    return b.as_markup()
+
 def kb_chart_tf() -> InlineKeyboardMarkup:
     b=InlineKeyboardBuilder()
     for tf in ["1m","5m","15m","30m"]:
