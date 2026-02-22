@@ -109,3 +109,14 @@ def kb_strategies_menu() -> InlineKeyboardMarkup:
     b.button(text="⬅️ Назад", callback_data="nav:back:main")
     b.adjust(2, 2, 1)
     return b.as_markup()
+
+
+def kb_checklists_menu() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Перед сделкой", callback_data="checklists:pre")
+    b.button(text="🧾 Post-Mortem", callback_data="checklists:post")
+    b.button(text="🎯 PROMO чеклист", callback_data="checklists:promo")
+    b.button(text="🧯 Safe-mode (устал/сомневаюсь)", callback_data="checklists:safe_mode")
+    b.button(text="⬅️ Назад", callback_data="nav:back:main")
+    b.adjust(1, 1, 1, 1, 1)
+    return b.as_markup()
