@@ -1,9 +1,9 @@
-import ccxt
+from . import market_data
+
 
 def top_movers(limit: int = 10, direction: str = "gainers") -> list[tuple[str, float]]:
-    ex = ccxt.gateio({"enableRateLimit": True})
-    tickers = ex.fetch_tickers()
-    items=[]
+    tickers = market_data.fetch_tickers()
+    items = []
     for sym, t in tickers.items():
         if not sym.endswith("/USDT"):
             continue

@@ -9,6 +9,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.markdown import hbold, hcode
 
 from datetime import datetime, timezone
+import logging
 import aiosqlite
 import secrets
 
@@ -27,7 +28,11 @@ from .keyboards import (
 )
 from .charts import fetch_ohlcv, add_ma30, detect_regime, render_png
 from .coins import top_movers
+from .market_data import MarketDataError
 from .texts import DECISION_BRIEF, PROMO_TEXT, TILT_TEXT, CHECKLIST_PRE, CHECKLIST_POST, DISCLAIMER
+
+
+logger = logging.getLogger(__name__)
 
 
 class SupportStates(StatesGroup):
@@ -223,7 +228,11 @@ async def run():
             return
         await cq.answer("Считаю...")
         direction = "gainers" if cq.data.endswith("gainers") else "losers"
-        movers = top_movers(limit=10, direction=direction)
+        try:
+            movers = top_movers(limit=10, direction=direction)
+        except MarketDataError as exc:
+            logger.exception("Coins movers failed: direction=%s details=%s", direction, exc.details)
+            return await cq.message.answer(f"❌ {exc.user_message}")
         lines = [f"{i+1}) <code>{sym}</code>  {pct:+.2f}%" for i, (sym, pct) in enumerate(movers)]
         await cq.message.answer(
             ("📈 Топ рост\n" if direction == "gainers" else "📉 Топ падение\n")
@@ -306,8 +315,12 @@ async def run():
             df = add_ma30(fetch_ohlcv(symbol, tf))
             reg = detect_regime(df)
             png = render_png(df, f"{symbol} • {tf} • MA30 • {reg}")
-        except Exception as e:
-            return await cq.message.answer(f"❌ Ошибка: <code>{str(e)[:200]}</code>")
+        except MarketDataError as exc:
+            logger.exception("Chart market data failed: symbol=%s timeframe=%s details=%s", symbol, tf, exc.details)
+            return await cq.message.answer(f"❌ {exc.user_message}")
+        except Exception:
+            logger.exception("Chart rendering failed: symbol=%s timeframe=%s", symbol, tf)
+            return await cq.message.answer("❌ Не удалось построить график. Попробуйте позже.")
         await cq.message.answer_photo(
             photo=png,
             caption=f"{hbold(symbol)} • {hcode(tf)}\nРежим: {hbold(reg)}\n\n{DECISION_BRIEF}",
