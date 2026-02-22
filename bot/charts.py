@@ -1,19 +1,23 @@
 import io
-import pandas as pd
+
 import matplotlib.pyplot as plt
-import ccxt
+import pandas as pd
+
+from . import market_data
+
 
 def fetch_ohlcv(symbol: str, timeframe: str, limit: int = 220) -> pd.DataFrame:
-    ex = ccxt.gateio({"enableRateLimit": True})
-    ohlcv = ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-    df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","volume"])
+    ohlcv = market_data.fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
+    df = pd.DataFrame(ohlcv, columns=["ts", "open", "high", "low", "close", "volume"])
     df["dt"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
     return df
 
+
 def add_ma30(df: pd.DataFrame) -> pd.DataFrame:
-    df=df.copy()
+    df = df.copy()
     df["ma30"] = df["close"].rolling(30).mean()
     return df
+
 
 def detect_regime(df: pd.DataFrame) -> str:
     ma = df["ma30"].dropna()
@@ -31,15 +35,16 @@ def detect_regime(df: pd.DataFrame) -> str:
         return "WEAKNESS"
     return "RANGE"
 
+
 def render_png(df: pd.DataFrame, title: str) -> bytes:
-    fig = plt.figure(figsize=(10,5))
+    fig = plt.figure(figsize=(10, 5))
     ax = fig.add_subplot(111)
     ax.plot(df["dt"], df["close"], label="close")
     ax.plot(df["dt"], df["ma30"], label="MA30")
     ax.set_title(title)
     ax.legend()
     fig.autofmt_xdate()
-    buf=io.BytesIO()
+    buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=160, bbox_inches="tight")
     plt.close(fig)
     return buf.getvalue()
