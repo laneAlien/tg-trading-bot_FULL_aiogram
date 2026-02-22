@@ -98,3 +98,14 @@ def kb_journal() -> InlineKeyboardMarkup:
     b.button(text="⬅️ Назад", callback_data="nav:back:main")
     b.adjust(1,1,1)
     return b.as_markup()
+
+
+def kb_strategies_menu() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="📈 Spot Grid", callback_data="strategies:spot_grid")
+    b.button(text="🎯 Trailing", callback_data="strategies:trailing")
+    b.button(text="🌊 Swing", callback_data="strategies:swing")
+    b.button(text="⚠️ Manual 1m", callback_data="strategies:manual_1m")
+    b.button(text="⬅️ Назад", callback_data="nav:back:main")
+    b.adjust(2, 2, 1)
+    return b.as_markup()

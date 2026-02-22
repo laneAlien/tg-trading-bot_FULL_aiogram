@@ -27,6 +27,7 @@ from .keyboards import (
     kb_chart_tf,
     kb_symbol_actions,
     kb_journal,
+    kb_strategies_menu,
 )
 from .charts import fetch_ohlcv, add_ma30, detect_regime, render_png
 from .coins import top_movers
@@ -40,6 +41,11 @@ from .texts import (
     REGIME_DETECT_RULE_TEXT,
     REGIME_INVALIDATORS_TEXT,
     REGIME_MENU_TEXT,
+    STRATEGIES_MENU_TEXT,
+    STRATEGY_MANUAL_1M_TEXT,
+    STRATEGY_SPOT_GRID_TEXT,
+    STRATEGY_SWING_TEXT,
+    STRATEGY_TRAILING_TEXT,
     TILT_TEXT,
 )
 
@@ -433,7 +439,35 @@ async def run():
         if not await ensure_access(cfg, cq):
             return
         await cq.answer()
-        await cq.message.answer("⚙️ Стратегии\n\n" + DECISION_BRIEF)
+        await cq.message.edit_text(STRATEGIES_MENU_TEXT, reply_markup=kb_strategies_menu())
+
+    @dp.callback_query(F.data == "strategies:spot_grid")
+    async def strategy_spot_grid(cq: CallbackQuery):
+        if not await ensure_access(cfg, cq):
+            return
+        await cq.answer()
+        await cq.message.answer(STRATEGY_SPOT_GRID_TEXT, reply_markup=kb_strategies_menu())
+
+    @dp.callback_query(F.data == "strategies:trailing")
+    async def strategy_trailing(cq: CallbackQuery):
+        if not await ensure_access(cfg, cq):
+            return
+        await cq.answer()
+        await cq.message.answer(STRATEGY_TRAILING_TEXT, reply_markup=kb_strategies_menu())
+
+    @dp.callback_query(F.data == "strategies:swing")
+    async def strategy_swing(cq: CallbackQuery):
+        if not await ensure_access(cfg, cq):
+            return
+        await cq.answer()
+        await cq.message.answer(STRATEGY_SWING_TEXT, reply_markup=kb_strategies_menu())
+
+    @dp.callback_query(F.data == "strategies:manual_1m")
+    async def strategy_manual_1m(cq: CallbackQuery):
+        if not await ensure_access(cfg, cq):
+            return
+        await cq.answer()
+        await cq.message.answer(STRATEGY_MANUAL_1M_TEXT, reply_markup=kb_strategies_menu())
 
     # Journal
     @dp.callback_query(F.data == "main:journal")
