@@ -1,7 +1,10 @@
 import io
-import pandas as pd
+
 import matplotlib.pyplot as plt
-import ccxt
+import pandas as pd
+
+from . import market_data
+
 
 EXCHANGE_IDS = ["gateio", "bybit", "mexc"]
 
@@ -24,6 +27,7 @@ def fetch_ohlcv(symbol: str, timeframe: str, limit: int = 220) -> pd.DataFrame:
             last_error = f"{ex_id}: {e}"
             continue
     raise RuntimeError(last_error or "Не удалось получить OHLCV")
+
 
 
 def add_ma30(df: pd.DataFrame) -> pd.DataFrame:

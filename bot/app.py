@@ -1,4 +1,5 @@
 from aiogram import Bot, Dispatcher, F
+import asyncio
 from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -7,6 +8,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.utils.markdown import hbold, hcode
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from datetime import datetime, timezone, timedelta
 import aiosqlite
@@ -479,6 +482,47 @@ async def run():
         await state.set_state(SupportStates.waiting_ticket_text)
         await cq.message.answer("Опиши проблему одним сообщением.")
 
+    @dp.callback_query(F.data == "support:mine")
+    @dp.callback_query(F.data.startswith("support:mine:"))
+    async def support_mine(cq: CallbackQuery):
+        if not await ensure_access(cfg, cq):
+            return
+        offset = 0
+        if cq.data.startswith("support:mine:"):
+            try:
+                offset = max(0, int(cq.data.rsplit(":", 1)[1]))
+            except ValueError:
+                offset = 0
+        limit = 5
+        await cq.answer()
+
+        tickets = await db.list_user_tickets(cfg.db_path, cq.from_user.id, limit=limit, offset=offset)
+        total = await db.count_user_tickets(cfg.db_path, cq.from_user.id)
+
+        if not tickets:
+            return await cq.message.answer("У тебя пока нет тикетов.", reply_markup=kb_support())
+
+        lines = [f"🧾 Твои тикеты ({offset + 1}-{min(offset + len(tickets), total)} из {total})", ""]
+        for t in tickets:
+            status = "🟢 open" if t["status"] == "open" else "⚫ closed"
+            preview = "—"
+            messages = await db.get_ticket_messages(cfg.db_path, int(t["ticket_id"]), limit=1)
+            if messages:
+                preview = _fmt_ticket_short_text(messages[0].get("text"))
+            lines.extend(
+                [
+                    f"<b>#{t['ticket_id']}</b> • {status}",
+                    f"Дата: <code>{_fmt_ticket_dt(t.get('created_at'))}</code>",
+                    f"Текст: {hcode(preview)}",
+                    "",
+                ]
+            )
+
+        await cq.message.answer(
+            "\n".join(lines).rstrip(),
+            reply_markup=_kb_support_mine_page(offset=offset, total=total, limit=limit),
+        )
+
     @dp.message(SupportStates.waiting_ticket_text, F.text)
     async def support_take(m: Message, state: FSMContext):
         await state.clear()
@@ -602,7 +646,8 @@ async def run():
         uid = int(m.text.strip())
         await db.upsert_user(cfg.db_path, uid, None)
         await db.set_whitelist(cfg.db_path, uid, True)
-        await m.reply("✅ Добавлен")
+        ok, msg = await issue_private_channel_invite(bot, cfg, uid)
+        await m.reply(f"✅ Добавлен в whitelist\n{'✅' if ok else '⚠️'} {msg}")
 
     @dp.callback_query(F.data == "admin:whitelist:remove")
     async def wl_remove(cq: CallbackQuery, state: FSMContext):
@@ -620,6 +665,34 @@ async def run():
         uid = int(m.text.strip())
         await db.upsert_user(cfg.db_path, uid, None)
         await db.set_whitelist(cfg.db_path, uid, False)
-        await m.reply("✅ Убран")
+
+        revoke_note = ""
+        if cfg.private_channel_id:
+            chat_id = int(cfg.private_channel_id)
+            active_invites = await db.list_active_channel_invites(cfg.db_path, uid, chat_id)
+            revoked = 0
+            for invite in active_invites:
+                try:
+                    await bot.revoke_chat_invite_link(chat_id=chat_id, invite_link=invite["invite_link"])
+                    await db.mark_channel_invite_revoked(cfg.db_path, invite["invite_link"])
+                    revoked += 1
+                except Exception:
+                    continue
+            if revoked:
+                revoke_note = f"\n🔒 Отозвано ссылок: {revoked}"
+            else:
+                revoke_note = (
+                    "\n⚠️ Старые ссылки автоматически не отозваны. "
+                    "Нужны права бота и/или дополнительная логика массового отзыва."
+                )
+
+            try:
+                await bot.ban_chat_member(chat_id=chat_id, user_id=uid)
+                await bot.unban_chat_member(chat_id=chat_id, user_id=uid, only_if_banned=True)
+                revoke_note += "\n🚫 Пользователь удалён из канала (ban+unban)."
+            except Exception as e:
+                revoke_note += f"\n⚠️ Не удалось выполнить ban+unban: {str(e)[:180]}"
+
+        await m.reply("✅ Убран" + revoke_note)
 
     await dp.start_polling(bot)

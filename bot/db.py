@@ -54,6 +54,19 @@ CREATE TABLE IF NOT EXISTS payments (
   created_at TEXT NOT NULL,
   paid_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS channel_invites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  chat_id INTEGER NOT NULL,
+  invite_link TEXT NOT NULL,
+  invite_link_name TEXT,
+  created_at TEXT NOT NULL,
+  expire_date TEXT,
+  member_limit INTEGER,
+  creates_join_request INTEGER NOT NULL DEFAULT 0,
+  revoked_at TEXT
+);
 """
 
 
@@ -258,5 +271,80 @@ async def get_payment(db_path: str, payload: str) -> dict | None:
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM payments WHERE payload=?", (payload,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def add_channel_invite(
+    db_path: str,
+    user_id: int,
+    chat_id: int,
+    invite_link: str,
+    invite_link_name: str | None,
+    expire_date: str | None,
+    member_limit: int | None,
+    creates_join_request: bool,
+) -> None:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            INSERT INTO channel_invites (
+                user_id, chat_id, invite_link, invite_link_name,
+                created_at, expire_date, member_limit, creates_join_request
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                chat_id,
+                invite_link,
+                invite_link_name,
+                now_iso(),
+                expire_date,
+                member_limit,
+                1 if creates_join_request else 0,
+            ),
+        )
+        await db.commit()
+
+
+async def list_active_channel_invites(db_path: str, user_id: int, chat_id: int) -> list[dict]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT *
+            FROM channel_invites
+            WHERE user_id=? AND chat_id=? AND revoked_at IS NULL
+            ORDER BY id DESC
+            """,
+            (user_id, chat_id),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def mark_channel_invite_revoked(db_path: str, invite_link: str) -> None:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "UPDATE channel_invites SET revoked_at=? WHERE invite_link=?",
+            (now_iso(), invite_link),
+        )
+        await db.commit()
+
+
+async def get_last_channel_invite(db_path: str, user_id: int, chat_id: int) -> dict | None:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT *
+            FROM channel_invites
+            WHERE user_id=? AND chat_id=?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (user_id, chat_id),
+        )
         row = await cur.fetchone()
         return dict(row) if row else None

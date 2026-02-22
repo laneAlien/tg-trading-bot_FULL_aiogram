@@ -1,4 +1,5 @@
-import ccxt
+from . import market_data
+
 
 EXCHANGE_IDS = ["gateio", "bybit", "mexc"]
 

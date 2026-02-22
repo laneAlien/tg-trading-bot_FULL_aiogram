@@ -34,8 +34,9 @@ def kb_access(show_agree: bool = False) -> InlineKeyboardMarkup:
 def kb_support() -> InlineKeyboardMarkup:
     b=InlineKeyboardBuilder()
     b.button(text="✉️ Создать тикет", callback_data="support:new")
+    b.button(text="📂 Мои тикеты", callback_data="support:mine")
     b.button(text="⬅️ Назад", callback_data="nav:back:main")
-    b.adjust(1,1)
+    b.adjust(1,1,1)
     return b.as_markup()
 
 def kb_ticket_admin(ticket_id: int) -> InlineKeyboardMarkup:
@@ -74,6 +75,16 @@ def kb_symbol_actions(symbol: str, is_fav: bool) -> InlineKeyboardMarkup:
     b.adjust(1,1,1,1)
     return b.as_markup()
 
+
+def kb_regime_menu() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="🧠 Определить режим (15m MA30)", callback_data="regime:detect")
+    b.button(text="🚫 Инвалидаторы идеи", callback_data="regime:invalidators")
+    b.button(text="📊 График по TF", callback_data="regime:tfs")
+    b.button(text="⬅️ Назад", callback_data="nav:back:main")
+    b.adjust(1, 1, 1, 1)
+    return b.as_markup()
+
 def kb_chart_tf() -> InlineKeyboardMarkup:
     b=InlineKeyboardBuilder()
     for tf in ["1m","5m","15m","30m"]:
@@ -88,4 +99,26 @@ def kb_journal() -> InlineKeyboardMarkup:
     b.button(text="🗂 Последние записи", callback_data="journal:list")
     b.button(text="⬅️ Назад", callback_data="nav:back:main")
     b.adjust(1,1,1)
+    return b.as_markup()
+
+
+def kb_strategies_menu() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="📈 Spot Grid", callback_data="strategies:spot_grid")
+    b.button(text="🎯 Trailing", callback_data="strategies:trailing")
+    b.button(text="🌊 Swing", callback_data="strategies:swing")
+    b.button(text="⚠️ Manual 1m", callback_data="strategies:manual_1m")
+    b.button(text="⬅️ Назад", callback_data="nav:back:main")
+    b.adjust(2, 2, 1)
+    return b.as_markup()
+
+
+def kb_checklists_menu() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Перед сделкой", callback_data="checklists:pre")
+    b.button(text="🧾 Post-Mortem", callback_data="checklists:post")
+    b.button(text="🎯 PROMO чеклист", callback_data="checklists:promo")
+    b.button(text="🧯 Safe-mode (устал/сомневаюсь)", callback_data="checklists:safe_mode")
+    b.button(text="⬅️ Назад", callback_data="nav:back:main")
+    b.adjust(1, 1, 1, 1, 1)
     return b.as_markup()
