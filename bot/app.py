@@ -13,8 +13,26 @@ from aiogram.utils.markdown import hbold, hcode
 
 from . import db
 from .config import load_config
-from .keyboards import kb_access, kb_main_access_only
-from .texts import DISCLAIMER
+from .keyboards import (
+    kb_access,
+    kb_checklist_guide,
+    kb_checklists_menu,
+    kb_main_access_only,
+    kb_strategies_menu,
+    kb_strategy_guide,
+)
+from .texts import (
+    CHECKLIST_POST,
+    CHECKLIST_PRE,
+    CHECKLIST_PROMO,
+    CHECKLIST_SAFE_MODE,
+    DISCLAIMER,
+    STRATEGIES_MENU_TEXT,
+    STRATEGY_MANUAL_1M_TEXT,
+    STRATEGY_SPOT_GRID_TEXT,
+    STRATEGY_SWING_TEXT,
+    STRATEGY_TRAILING_TEXT,
+)
 
 
 def mk_payload(user_id: int) -> str:
@@ -262,6 +280,80 @@ async def run() -> None:
             "✅ Оплата получена. Доступ активен на 30 дней.\n"
             f"Подписка до: {hcode(until[:19])}{invite_line}",
             reply_markup=kb_main_access_only(cfg.analytics_chat_url),
+        )
+
+    @dp.callback_query(F.data == "main:checklists")
+    async def checklists_main(cq: CallbackQuery):
+        await cq.answer()
+        await cq.message.edit_text("✅ Чеклисты", reply_markup=kb_checklists_menu())
+
+    @dp.callback_query(F.data == "checklists:pre")
+    async def checklists_pre(cq: CallbackQuery):
+        await cq.answer()
+        await cq.message.edit_text(
+            CHECKLIST_PRE,
+            reply_markup=kb_checklist_guide(prev_step=None, next_step="post"),
+        )
+
+    @dp.callback_query(F.data == "checklists:post")
+    async def checklists_post(cq: CallbackQuery):
+        await cq.answer()
+        await cq.message.edit_text(
+            CHECKLIST_POST,
+            reply_markup=kb_checklist_guide(prev_step="pre", next_step="promo"),
+        )
+
+    @dp.callback_query(F.data == "checklists:promo")
+    async def checklists_promo(cq: CallbackQuery):
+        await cq.answer()
+        await cq.message.edit_text(
+            CHECKLIST_PROMO,
+            reply_markup=kb_checklist_guide(prev_step="post", next_step="safe_mode"),
+        )
+
+    @dp.callback_query(F.data == "checklists:safe_mode")
+    async def checklists_safe_mode(cq: CallbackQuery):
+        await cq.answer()
+        await cq.message.edit_text(
+            CHECKLIST_SAFE_MODE,
+            reply_markup=kb_checklist_guide(prev_step="promo", next_step=None),
+        )
+
+    @dp.callback_query(F.data == "main:strategies")
+    async def strategies_main(cq: CallbackQuery):
+        await cq.answer()
+        await cq.message.edit_text(STRATEGIES_MENU_TEXT, reply_markup=kb_strategies_menu())
+
+    @dp.callback_query(F.data == "strategies:spot_grid")
+    async def strategy_spot_grid(cq: CallbackQuery):
+        await cq.answer()
+        await cq.message.edit_text(
+            STRATEGY_SPOT_GRID_TEXT,
+            reply_markup=kb_strategy_guide(prev_step=None, next_step="trailing"),
+        )
+
+    @dp.callback_query(F.data == "strategies:trailing")
+    async def strategy_trailing(cq: CallbackQuery):
+        await cq.answer()
+        await cq.message.edit_text(
+            STRATEGY_TRAILING_TEXT,
+            reply_markup=kb_strategy_guide(prev_step="spot_grid", next_step="swing"),
+        )
+
+    @dp.callback_query(F.data == "strategies:swing")
+    async def strategy_swing(cq: CallbackQuery):
+        await cq.answer()
+        await cq.message.edit_text(
+            STRATEGY_SWING_TEXT,
+            reply_markup=kb_strategy_guide(prev_step="trailing", next_step="manual_1m"),
+        )
+
+    @dp.callback_query(F.data == "strategies:manual_1m")
+    async def strategy_manual_1m(cq: CallbackQuery):
+        await cq.answer()
+        await cq.message.edit_text(
+            STRATEGY_MANUAL_1M_TEXT,
+            reply_markup=kb_strategy_guide(prev_step="swing", next_step=None),
         )
 
     @dp.callback_query(F.data == "main:private")
