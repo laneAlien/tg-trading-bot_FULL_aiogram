@@ -8,10 +8,10 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
+from aiogram.types import BufferedInputFile, CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
 from aiogram.utils.markdown import hbold, hcode
 
-from . import db
+from . import charts, coins, db
 from .config import load_config
 from .keyboards import (
     kb_access,
@@ -33,6 +33,26 @@ from .texts import (
     STRATEGY_SWING_TEXT,
     STRATEGY_TRAILING_TEXT,
 )
+
+
+def _kb_symbol_choices(symbols: list[str]):
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+    b = InlineKeyboardBuilder()
+    for symbol in symbols:
+        b.button(text=symbol, callback_data=f"coins:set:{symbol}")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def _kb_symbol_actions(symbol: str):
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+    b = InlineKeyboardBuilder()
+    b.button(text="⭐ В избранное", callback_data=f"coins:fav:add:{symbol}")
+    b.button(text="📈 График", callback_data=f"coins:chart:{symbol}")
+    b.adjust(1)
+    return b.as_markup()
 
 
 def mk_payload(user_id: int) -> str:
@@ -364,5 +384,86 @@ async def run() -> None:
         ok, message = await issue_private_channel_invite(bot, cfg, cq.from_user.id)
         prefix = "✅ " if ok else "❌ "
         await cq.message.answer(prefix + message)
+
+
+    @dp.message(Command("coins"))
+    async def coins_search_take(m: Message):
+        query = (m.text or "").split(maxsplit=1)
+        raw_query = query[1].strip() if len(query) > 1 else ""
+        await _handle_coins_search(m, raw_query)
+
+    @dp.message(F.text & ~F.text.startswith("/"))
+    async def coins_search_take_text(m: Message):
+        await _handle_coins_search(m, (m.text or "").strip())
+
+    async def _handle_coins_search(m: Message, raw_query: str):
+        if not raw_query:
+            return
+
+        await db.upsert_user(cfg.db_path, m.from_user.id, m.from_user.username)
+        symbols = coins.search_market_symbols(raw_query, limit=10)
+        if not symbols:
+            await m.answer(
+                "Не нашёл подходящих рынков.\n"
+                "Примеры запроса: BTC, rave, eth/usdt",
+            )
+            return
+
+        if len(symbols) == 1:
+            symbol = symbols[0]
+            await db.set_active_symbol(cfg.db_path, m.from_user.id, symbol)
+            await m.answer(
+                f"Выбран символ: {hbold(symbol)}\nЧто сделать дальше?",
+                reply_markup=_kb_symbol_actions(symbol),
+            )
+            return
+
+        await m.answer(
+            "Нашёл несколько совпадений. Выбери нужный символ:",
+            reply_markup=_kb_symbol_choices(symbols),
+        )
+
+    @dp.callback_query(F.data.startswith("coins:set:"))
+    async def coins_set_symbol(cq: CallbackQuery):
+        parts = (cq.data or "").split(":", maxsplit=2)
+        if len(parts) < 3:
+            await cq.answer("Некорректный символ", show_alert=True)
+            return
+        symbol = parts[2]
+        await db.upsert_user(cfg.db_path, cq.from_user.id, cq.from_user.username)
+        await db.set_active_symbol(cfg.db_path, cq.from_user.id, symbol)
+        await cq.answer("Символ выбран")
+        await cq.message.answer(
+            f"Активный символ: {hbold(symbol)}\nЧто сделать дальше?",
+            reply_markup=_kb_symbol_actions(symbol),
+        )
+
+    @dp.callback_query(F.data.startswith("coins:fav:add:"))
+    async def coins_add_favorite(cq: CallbackQuery):
+        parts = (cq.data or "").split(":", maxsplit=3)
+        if len(parts) < 4:
+            await cq.answer("Некорректный символ", show_alert=True)
+            return
+        symbol = parts[3]
+        await db.add_favorite(cfg.db_path, cq.from_user.id, symbol)
+        await cq.answer("Добавлено в избранное ✅")
+
+    @dp.callback_query(F.data.startswith("coins:chart:"))
+    async def coins_chart(cq: CallbackQuery):
+        parts = (cq.data or "").split(":", maxsplit=2)
+        if len(parts) < 3:
+            await cq.answer("Некорректный символ", show_alert=True)
+            return
+        symbol = parts[2]
+        await cq.answer("Готовлю график...")
+        try:
+            df = charts.fetch_ohlcv(symbol, timeframe="15m", limit=220)
+            df = charts.add_ma30(df)
+            png = charts.render_png(df, f"{symbol} • 15m")
+        except Exception:
+            await cq.message.answer("Не удалось построить график. Попробуй позже.")
+            return
+
+        await cq.message.answer_photo(BufferedInputFile(png, filename="chart.png"), caption=f"📈 {symbol}")
 
     await dp.start_polling(bot)
