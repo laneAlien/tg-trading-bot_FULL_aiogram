@@ -80,6 +80,17 @@ async def issue_private_channel_invite(bot: Bot, cfg, user_id: int) -> tuple[boo
     except Exception:
         pass
 
+    active_invites = await db.list_active_channel_invites(cfg.db_path, user_id=user_id, chat_id=chat_id)
+    for old_invite in active_invites:
+        link = old_invite.get("invite_link")
+        if not link:
+            continue
+        try:
+            await bot.revoke_chat_invite_link(chat_id=chat_id, invite_link=link)
+        except Exception:
+            pass
+        await db.mark_channel_invite_revoked(cfg.db_path, link)
+
     try:
         invite = await bot.create_chat_invite_link(chat_id=chat_id, member_limit=1)
     except TelegramBadRequest:
@@ -95,7 +106,13 @@ async def issue_private_channel_invite(bot: Bot, cfg, user_id: int) -> tuple[boo
         member_limit=getattr(invite, "member_limit", None),
         creates_join_request=bool(getattr(invite, "creates_join_request", False)),
     )
-    return True, f"🔗 Ссылка для входа:\n{invite.invite_link}"
+
+    try:
+        await bot.send_message(user_id, f"🔗 Твоя ссылка в закрытый канал:\n{invite.invite_link}")
+    except Exception as e:
+        return False, f"Ссылка создана, но не удалось отправить в ЛС: {e}"
+
+    return True, "Ссылка отправлена в ЛС ✅"
 
 
 async def ensure_access(cfg, cq: CallbackQuery) -> bool:
@@ -129,6 +146,22 @@ async def run() -> None:
     @dp.message(Command("getchatid"))
     async def getchatid(m: Message):
         await m.answer(f"chat_id = {hcode(str(m.chat.id))}")
+
+    @dp.message(Command("wl_add"))
+    async def wl_add_do(m: Message):
+        if m.from_user.id != cfg.admin_user_id:
+            return
+
+        parts = (m.text or "").split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip().isdigit():
+            return await m.answer("Использование: /wl_add <user_id>")
+
+        target_user_id = int(parts[1].strip())
+        await db.upsert_user(cfg.db_path, target_user_id, None)
+        await db.set_whitelist(cfg.db_path, target_user_id, True)
+        ok, msg = await issue_private_channel_invite(bot, cfg, target_user_id)
+        prefix = "✅ " if ok else "⚠️ "
+        await m.answer(f"{prefix}Whitelist для {target_user_id} включен. {msg}")
 
     @dp.callback_query(F.data == "nav:back:main")
     async def back_main(cq: CallbackQuery):
@@ -225,9 +258,11 @@ async def run() -> None:
 
         await db.mark_payment_paid(cfg.db_path, payload)
         until = await db.grant_access_30d(cfg.db_path, m.from_user.id)
+        invite_ok, invite_msg = await issue_private_channel_invite(bot, cfg, m.from_user.id)
+        invite_line = f"\n{('✅' if invite_ok else '⚠️')} {invite_msg}"
         await m.answer(
             "✅ Оплата получена. Доступ активен на 30 дней.\n"
-            f"Подписка до: {hcode(until[:19])}",
+            f"Подписка до: {hcode(until[:19])}{invite_line}",
             reply_markup=kb_main(),
         )
 
