@@ -12,6 +12,7 @@ class Config:
     stars_price: int
     stars_title: str
     stars_description: str
+    analytics_chat_url: str | None
 
 def load_config() -> Config:
     return Config(
@@ -24,4 +25,5 @@ def load_config() -> Config:
         stars_price=int(os.environ.get("STARS_PRICE","199")),
         stars_title=os.environ.get("STARS_TITLE","Access 30 days"),
         stars_description=os.environ.get("STARS_DESCRIPTION","Trading bot access for 30 days"),
+        analytics_chat_url=os.environ.get("ANALYTICS_CHAT_URL", "").strip() or None,
     )
