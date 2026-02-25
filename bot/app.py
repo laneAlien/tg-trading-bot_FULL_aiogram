@@ -13,7 +13,7 @@ from aiogram.utils.markdown import hbold, hcode
 
 from . import db
 from .config import load_config
-from .keyboards import kb_access, kb_main
+from .keyboards import kb_access, kb_main_access_only
 from .texts import DISCLAIMER
 
 
@@ -138,9 +138,9 @@ async def run() -> None:
         await db.upsert_user(cfg.db_path, m.from_user.id, m.from_user.username)
         await maybe_send_expiry_notice(bot, cfg, m.from_user.id)
         await m.answer(
-            "🏠 Бот упрощён: оставлен только доступ и вход в закрытый канал.\n"
-            "Остальные функции переезжают в чат и будут дорабатываться.",
-            reply_markup=kb_main(),
+            "🏠 Это access-бот: здесь можно оформить доступ и получить ссылку в приватный канал.\n"
+            "Аналитика, режимы и гайды вынесены в отдельный чат.",
+            reply_markup=kb_main_access_only(cfg.analytics_chat_url),
         )
 
     @dp.message(Command("getchatid"))
@@ -166,17 +166,15 @@ async def run() -> None:
     @dp.callback_query(F.data == "nav:back:main")
     async def back_main(cq: CallbackQuery):
         await cq.answer()
-        await cq.message.edit_text("🏠 Главное меню", reply_markup=kb_main())
+        await cq.message.edit_text("🏠 Главное меню", reply_markup=kb_main_access_only(cfg.analytics_chat_url))
 
-    @dp.callback_query(F.data == "main:help")
-    async def help_(cq: CallbackQuery):
+    @dp.callback_query(F.data == "main:support")
+    async def support_main(cq: CallbackQuery):
         await cq.answer()
         await cq.message.answer(
-            "ℹ️ Сейчас в боте доступны только:\n"
-            "• ⭐ управление доступом\n"
-            "• 🔒 выдача ссылки в закрытый канал\n\n"
-            "Остальные функции будут в отдельном чате после доработки.",
-            reply_markup=kb_main(),
+            "🆘 Поддержка: напиши администратору или в support-группу.\n"
+            f"ID support-группы: {hcode(str(cfg.support_group_id))}",
+            reply_markup=kb_main_access_only(cfg.analytics_chat_url),
         )
 
     @dp.callback_query(F.data == "main:access")
@@ -263,7 +261,7 @@ async def run() -> None:
         await m.answer(
             "✅ Оплата получена. Доступ активен на 30 дней.\n"
             f"Подписка до: {hcode(until[:19])}{invite_line}",
-            reply_markup=kb_main(),
+            reply_markup=kb_main_access_only(cfg.analytics_chat_url),
         )
 
     @dp.callback_query(F.data == "main:private")

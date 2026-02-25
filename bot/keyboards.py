@@ -2,11 +2,14 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def kb_main() -> InlineKeyboardMarkup:
+def kb_main_access_only(analytics_chat_url: str | None = None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="🔒 Вход в закрытый канал", callback_data="main:private")
     b.button(text="⭐ Доступ", callback_data="main:access")
-    b.button(text="ℹ️ Помощь", callback_data="main:help")
+    b.button(text="🔒 Получить ссылку в канал", callback_data="main:private")
+    b.button(text="📌 Статус", callback_data="access:status")
+    b.button(text="🆘 Поддержка", callback_data="main:support")
+    if analytics_chat_url:
+        b.button(text="💬 Открыть чат аналитики", url=analytics_chat_url)
     b.adjust(1)
     return b.as_markup()
 
