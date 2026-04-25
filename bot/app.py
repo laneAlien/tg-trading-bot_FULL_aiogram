@@ -1,6 +1,9 @@
 import asyncio
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -101,8 +104,8 @@ async def expiry_reminder_loop(bot: Bot, cfg) -> None:
             users = await db.list_users_for_expiry_reminder(cfg.db_path, within_hours=48)
             for u in users:
                 await maybe_send_expiry_notice(bot, cfg, int(u["user_id"]))
-        except Exception as e:
-            print(f"[reminder_loop] error={e}")
+        except Exception:
+            logger.exception("[reminder_loop] Unexpected error")
         await asyncio.sleep(6 * 60 * 60)
 
 
@@ -169,7 +172,9 @@ async def run() -> None:
     bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
 
-    asyncio.create_task(expiry_reminder_loop(bot, cfg))
+    @dp.startup()
+    async def on_startup():
+        asyncio.create_task(expiry_reminder_loop(bot, cfg))
 
     @dp.message(CommandStart())
     async def start(m: Message):
